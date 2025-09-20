@@ -131,6 +131,9 @@ tix undo 1
 # Remove a single task
 tix rm 1
 
+# Force remove a single task
+tix rm 2 --confirm
+
 # Clear all completed tasks
 tix clear --completed
 

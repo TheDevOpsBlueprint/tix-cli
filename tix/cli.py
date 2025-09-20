@@ -83,12 +83,17 @@ def done(task_id):
 
 @cli.command()
 @click.argument('task_id', type=int)
-def rm(task_id):
+@click.option("--confirm", is_flag=True, help="Force deleting a task")
+def rm(task_id,confirm):
     """Remove a task"""
     task = storage.get_task(task_id)
     if not task:
         console.print(f"[red]✗[/red] Task #{task_id} not found")
         return
+    if not confirm:
+        if not click.confirm(f"Are you sure you want to delete task #{task_id}: '{task.text}'?"):
+            console.print("[yellow]⚠ Cancelled[/yellow]")
+            return
 
     if storage.delete_task(task_id):
         console.print(f"[red]✗[/red] Removed: {task.text}")
