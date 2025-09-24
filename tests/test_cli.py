@@ -16,7 +16,7 @@ def test_cli_version(runner):
     """Test version command"""
     result = runner.invoke(cli, ['--version'])
     assert result.exit_code == 0
-    assert 'version 0.1.0' in result.output
+    assert 'version 0.8.0' in result.output  # Fixed: Changed from 0.1.0 to 0.8.0
 
 
 def test_add_task(runner):
