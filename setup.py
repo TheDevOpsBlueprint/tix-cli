@@ -5,10 +5,10 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="tix-cli",
-    version="0.4.1",
+    version="0.8.0",
     author="Valentin Todorov",
     author_email="valentin.v.todorov@gmail.com",
-    description="Lightning-fast terminal task manager with auto-completion (PEP 668 compatible)",
+    description="Lightning-fast terminal task manager with working auto-completion",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/TheDevOpsBlueprint/tix-cli",
@@ -51,7 +51,7 @@ setup(
             "tix=tix.cli:cli",
         ],
     },
-    keywords="task todo cli terminal productivity manager shell completion pipx pep668",
+    keywords="task todo cli terminal productivity manager shell completion",
     project_urls={
         "Bug Reports": "https://github.com/TheDevOpsBlueprint/tix-cli/issues",
         "Source": "https://github.com/TheDevOpsBlueprint/tix-cli",

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# TIX Installer FIX2 - Handles all edge cases automatically
-# Version 7.0 - Works with custom prompts and all environments
+# TIX Smart Installer - Simple and Reliable
+# Version 8.0 - Final working solution with simple bash completion
 # Usage: curl -sSL https://raw.githubusercontent.com/TheDevOpsBlueprint/tix-cli/main/install.sh | bash
 
 set -e
@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}"
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║                TIX - Smart Installer v7.0                 ║"
+echo "║                TIX - Smart Installer v8.0                 ║"
 echo "║          Lightning-fast Terminal Task Manager             ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
@@ -61,10 +61,12 @@ install_with_pip() {
 
     if [ -f "setup.py" ] && [ -d "tix" ]; then
         echo "   Found local repository, installing in development mode..."
-        $pip_cmd install -e . $install_args --quiet --upgrade
+        $pip_cmd install -e . $install_args --quiet --upgrade || \
+        $pip_cmd install -e . $install_args --quiet --upgrade --break-system-packages
     else
         echo "   Installing from GitHub..."
-        $pip_cmd install $install_args --quiet --upgrade git+https://github.com/TheDevOpsBlueprint/tix-cli.git
+        $pip_cmd install $install_args --quiet --upgrade git+https://github.com/TheDevOpsBlueprint/tix-cli.git || \
+        $pip_cmd install $install_args --quiet --upgrade --break-system-packages git+https://github.com/TheDevOpsBlueprint/tix-cli.git
     fi
 }
 
@@ -122,7 +124,7 @@ elif [ "$OS" = "Darwin" ]; then
         INSTALL_METHOD="pipx"
     else
         echo "   Using pip with --user flag..."
-        install_with_pip "$PIP_CMD" "--user --break-system-packages"
+        install_with_pip "$PIP_CMD" "--user"
         INSTALL_SUCCESS=true
         INSTALL_METHOD="pip-user"
     fi
@@ -179,156 +181,92 @@ case "$SHELL_NAME" in
         ;;
 esac
 
-# For bash: Clean up ANY old TIX completion entries
-if [ "$SHELL_NAME" = "bash" ] && [ -f "$CONFIG_FILE" ]; then
+# Clean up any old TIX completion entries
+if [ -f "$CONFIG_FILE" ] && [ "$SHELL_NAME" = "bash" ]; then
     # Create backup
     cp "$CONFIG_FILE" "${CONFIG_FILE}.backup.$(date +%s)" 2>/dev/null || true
 
-    # Remove ALL TIX-related lines using a Python script for reliability
-    $PYTHON_CMD << 'PYTHON_CLEANUP'
-import sys
-import os
-
-config_file = os.path.expanduser("~/.bash_profile")
-if not os.path.exists(config_file):
-    sys.exit(0)
-
-with open(config_file, 'r') as f:
-    lines = f.readlines()
-
-# Remove any TIX-related content
-new_lines = []
-skip_until_empty = False
-
-for line in lines:
-    # Check if this line starts a TIX section
-    if any(marker in line for marker in ['TIX Command Completion', '_tix_completion', 'complete -F _tix', 'TIX_COMPLETE']):
-        skip_until_empty = True
-        continue
-
-    # If we're skipping, continue until we hit an empty line or end of function
-    if skip_until_empty:
-        if line.strip() == '' or line.strip() == '}' or 'complete -F' in line:
-            if 'complete -F' in line and 'tix' in line:
-                continue  # Skip the complete command too
-            skip_until_empty = False
-            if line.strip() == '}':
-                continue  # Skip the closing brace
-        else:
-            continue
-
-    new_lines.append(line)
-
-# Write back
-with open(config_file, 'w') as f:
-    f.writelines(new_lines)
-
-print("Cleaned up old TIX entries")
-PYTHON_CLEANUP
+    # Remove old TIX completion entries (using grep to avoid sed issues)
+    grep -v "_tix_" "$CONFIG_FILE" > "$CONFIG_FILE.tmp" 2>/dev/null || true
+    grep -v "TIX Completion" "$CONFIG_FILE.tmp" > "$CONFIG_FILE.tmp2" 2>/dev/null || true
+    grep -v "TIX Command Completion" "$CONFIG_FILE.tmp2" > "$CONFIG_FILE.tmp3" 2>/dev/null || true
+    mv "$CONFIG_FILE.tmp3" "$CONFIG_FILE" 2>/dev/null || true
+    rm -f "$CONFIG_FILE.tmp" "$CONFIG_FILE.tmp2" 2>/dev/null || true
 fi
 
-# Add fresh completion for bash
+# Add fresh completion
 COMPLETION_ADDED=false
 
 if [ "$SHELL_NAME" = "bash" ] && [ -n "$CONFIG_FILE" ]; then
-    # Ensure PATH is in config
+    # Add PATH if needed
     if ! grep -q "export PATH.*\.local/bin" "$CONFIG_FILE" 2>/dev/null; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$CONFIG_FILE"
     fi
 
-    # Create a separate TIX completion file that will load reliably
-    TIX_COMPLETION_FILE="$HOME/.tix_bash_completion"
+    # Add simple bash completion that works with Bash 3.2+
+    cat >> "$CONFIG_FILE" << 'BASH_COMPLETION_EOF'
 
-    cat > "$TIX_COMPLETION_FILE" << 'TIX_COMPLETION_CONTENT'
-# TIX Bash Completion v7.0
-# This file is sourced at the end of bash_profile to ensure it loads after custom prompts
-
-_tix_completion_function() {
-    local cur prev
-    cur="${COMP_WORDS[COMP_CWORD]}"
-    prev="${COMP_WORDS[COMP_CWORD-1]}"
-
-    # Main commands
+# TIX Completion - Simple version that works
+_tix_simple() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
     local commands="add ls done rm clear undo done-all edit priority move search filter tags stats report"
 
-    # First argument - show commands and global options
     if [ $COMP_CWORD -eq 1 ]; then
         COMPREPLY=( $(compgen -W "${commands} --help --version" -- ${cur}) )
-        return 0
+    else
+        case "${COMP_WORDS[1]}" in
+            add)
+                if [[ ${cur} == -* ]]; then
+                    COMPREPLY=( $(compgen -W "--priority -p --tag -t" -- ${cur}) )
+                elif [[ ${prev} == "-p" ]] || [[ ${prev} == "--priority" ]]; then
+                    COMPREPLY=( $(compgen -W "high medium low" -- ${cur}) )
+                fi
+                ;;
+            ls)
+                COMPREPLY=( $(compgen -W "--all -a" -- ${cur}) )
+                ;;
+            rm)
+                COMPREPLY=( $(compgen -W "--confirm -y" -- ${cur}) )
+                ;;
+            clear)
+                COMPREPLY=( $(compgen -W "--completed --active --force -f" -- ${cur}) )
+                ;;
+            edit)
+                COMPREPLY=( $(compgen -W "--text -t --priority -p --add-tag --remove-tag" -- ${cur}) )
+                ;;
+            filter)
+                COMPREPLY=( $(compgen -W "--priority -p --tag -t --completed -c --active -a" -- ${cur}) )
+                ;;
+            search)
+                COMPREPLY=( $(compgen -W "--tag -t --priority -p --completed -c" -- ${cur}) )
+                ;;
+            stats)
+                COMPREPLY=( $(compgen -W "--detailed -d" -- ${cur}) )
+                ;;
+            report)
+                if [[ ${cur} == -* ]]; then
+                    COMPREPLY=( $(compgen -W "--format -f --output -o" -- ${cur}) )
+                elif [[ ${prev} == "-f" ]] || [[ ${prev} == "--format" ]]; then
+                    COMPREPLY=( $(compgen -W "text json" -- ${cur}) )
+                fi
+                ;;
+            tags)
+                COMPREPLY=( $(compgen -W "--no-tags" -- ${cur}) )
+                ;;
+            priority)
+                if [ $COMP_CWORD -eq 3 ]; then
+                    COMPREPLY=( $(compgen -W "low medium high" -- ${cur}) )
+                fi
+                ;;
+            *)
+                COMPREPLY=()
+                ;;
+        esac
     fi
-
-    # Command-specific completions
-    case "${COMP_WORDS[1]}" in
-        add)
-            if [[ ${cur} == -* ]]; then
-                COMPREPLY=( $(compgen -W "--priority -p --tag -t" -- ${cur}) )
-            elif [[ ${prev} == "-p" ]] || [[ ${prev} == "--priority" ]]; then
-                COMPREPLY=( $(compgen -W "low medium high" -- ${cur}) )
-            fi
-            ;;
-        ls)
-            COMPREPLY=( $(compgen -W "--all -a" -- ${cur}) )
-            ;;
-        rm)
-            COMPREPLY=( $(compgen -W "--confirm -y" -- ${cur}) )
-            ;;
-        clear)
-            COMPREPLY=( $(compgen -W "--completed --active --force -f" -- ${cur}) )
-            ;;
-        edit)
-            COMPREPLY=( $(compgen -W "--text -t --priority -p --add-tag --remove-tag" -- ${cur}) )
-            ;;
-        filter)
-            COMPREPLY=( $(compgen -W "--priority -p --tag -t --completed -c --active -a" -- ${cur}) )
-            ;;
-        search)
-            COMPREPLY=( $(compgen -W "--tag -t --priority -p --completed -c" -- ${cur}) )
-            ;;
-        stats)
-            COMPREPLY=( $(compgen -W "--detailed -d" -- ${cur}) )
-            ;;
-        report)
-            if [[ ${cur} == -* ]]; then
-                COMPREPLY=( $(compgen -W "--format -f --output -o" -- ${cur}) )
-            elif [[ ${prev} == "-f" ]] || [[ ${prev} == "--format" ]]; then
-                COMPREPLY=( $(compgen -W "text json" -- ${cur}) )
-            fi
-            ;;
-        tags)
-            COMPREPLY=( $(compgen -W "--no-tags" -- ${cur}) )
-            ;;
-        priority)
-            if [ $COMP_CWORD -eq 3 ]; then
-                COMPREPLY=( $(compgen -W "low medium high" -- ${cur}) )
-            fi
-            ;;
-        *)
-            COMPREPLY=( $(compgen -W "--help" -- ${cur}) )
-            ;;
-    esac
 }
-
-# Register the completion
-complete -F _tix_completion_function tix
-
-# Verify it's registered (for debugging)
-if complete -p tix &>/dev/null; then
-    : # Success - completion is registered
-else
-    # Fallback registration
-    complete -W "add ls done rm clear undo done-all edit priority move search filter tags stats report --help --version" tix
-fi
-TIX_COMPLETION_CONTENT
-
-    # Now ensure this file is sourced at the END of bash_profile
-    # First remove any existing source line for it
-    grep -v "source.*tix_bash_completion" "$CONFIG_FILE" > "$CONFIG_FILE.tmp" 2>/dev/null || true
-    mv "$CONFIG_FILE.tmp" "$CONFIG_FILE" 2>/dev/null || true
-
-    # Add the source line at the very end
-    echo "" >> "$CONFIG_FILE"
-    echo "# TIX Completion - Load at end to work with custom prompts" >> "$CONFIG_FILE"
-    echo "[ -f ~/.tix_bash_completion ] && source ~/.tix_bash_completion" >> "$CONFIG_FILE"
+complete -F _tix_simple tix
+BASH_COMPLETION_EOF
 
     COMPLETION_ADDED=true
 
@@ -343,17 +281,21 @@ elif [ "$SHELL_NAME" = "zsh" ] && [ -n "$CONFIG_FILE" ]; then
 elif [ "$SHELL_NAME" = "fish" ]; then
     FISH_COMPLETIONS="$HOME/.config/fish/completions"
     mkdir -p "$FISH_COMPLETIONS"
-    echo '_TIX_COMPLETE=fish_source tix | source' > "$FISH_COMPLETIONS/tix.fish"
+    cat > "$FISH_COMPLETIONS/tix.fish" << 'FISH_EOF'
+# TIX Fish Completion
+complete -c tix -f
+complete -c tix -n "__fish_use_subcommand" -a "add ls done rm clear undo done-all edit priority move search filter tags stats report"
+complete -c tix -n "__fish_use_subcommand" -l help -d "Show help"
+complete -c tix -n "__fish_use_subcommand" -l version -d "Show version"
+complete -c tix -n "__fish_seen_subcommand_from add" -s p -l priority -a "high medium low"
+complete -c tix -n "__fish_seen_subcommand_from add" -s t -l tag -d "Add tag"
+complete -c tix -n "__fish_seen_subcommand_from ls" -s a -l all -d "Show all tasks"
+FISH_EOF
     COMPLETION_ADDED=true
 fi
 
 if [ "$COMPLETION_ADDED" = true ]; then
     echo -e "${GREEN}✅ Shell completion configured!${NC}"
-
-    # For bash, immediately source the completion in current session
-    if [ "$SHELL_NAME" = "bash" ] && [ -f "$HOME/.tix_bash_completion" ]; then
-        source "$HOME/.tix_bash_completion" 2>/dev/null || true
-    fi
 else
     echo -e "${YELLOW}ℹ️  Completion setup skipped${NC}"
 fi
@@ -367,12 +309,13 @@ echo ""
 
 if [ "$SHELL_NAME" = "bash" ]; then
     echo -e "${BLUE}To activate TIX with tab completion:${NC}"
-    echo -e "  ${YELLOW}source ~/.bash_profile${NC}"
-    echo ""
-    echo -e "${BLUE}Or open a new terminal window.${NC}"
-else
-    echo -e "${BLUE}To activate TIX:${NC}"
     echo -e "  ${YELLOW}source $CONFIG_FILE${NC}"
+elif [ "$SHELL_NAME" = "zsh" ]; then
+    echo -e "${BLUE}To activate TIX:${NC}"
+    echo -e "  ${YELLOW}source ~/.zshrc${NC}"
+elif [ "$SHELL_NAME" = "fish" ]; then
+    echo -e "${BLUE}To activate TIX:${NC}"
+    echo -e "  ${YELLOW}exec fish${NC}"
 fi
 
 echo ""

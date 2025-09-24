@@ -13,7 +13,7 @@ storage = TaskStorage()
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="0.7.0", prog_name="tix")
+@click.version_option(version="0.8.0", prog_name="tix")
 @click.pass_context
 def cli(ctx):
     """⚡ TIX - Lightning-fast terminal task manager
