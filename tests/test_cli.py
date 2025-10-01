@@ -43,11 +43,19 @@ def test_list_empty(runner):
     with runner.isolated_filesystem():
         # Create empty storage file
         temp_storage = Path.cwd() / "tasks.json"
-        temp_storage.write_text('[]')
+        temp_storage.write_text('{"next_id": 1, "tasks": []}')
 
         # Import and create storage instance
         from tix.storage.json_storage import TaskStorage
-        test_storage = TaskStorage(temp_storage)
+        from tix.models import Task
+        test_storage = TaskStorage(temp_storage, context="test_isolated")
+        
+        # Override load_tasks to not load global tasks from default context
+        def isolated_load_tasks():
+            data = test_storage._read_data()
+            return [Task.from_dict(item) for item in data["tasks"]]
+        test_storage.load_tasks = isolated_load_tasks
+        test_storage.get_active_tasks = lambda: [t for t in isolated_load_tasks() if not t.completed]
 
         # Patch the module-level storage object directly
         with patch('tix.cli.storage', test_storage):
