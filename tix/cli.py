@@ -3,6 +3,7 @@ from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
+from tix.storage.template_storage import TemplateStorage
 from datetime import datetime
 import subprocess
 import platform
@@ -14,6 +15,7 @@ from importlib import import_module
 # Initialize console and storage
 console = Console()
 storage = TaskStorage()
+template_storage = TemplateStorage()
 
 
 @click.group(invoke_without_command=True)
@@ -665,6 +667,7 @@ def open(task_id):
     for url in task.links:
         safe_open(url, is_link=True)  
 
+
 @cli.command()
 @click.option('--all', '-a', 'show_all', is_flag=True, help='Show completed tasks too')
 def interactive(show_all):
@@ -676,6 +679,44 @@ def interactive(show_all):
         sys.exit(1)
     app = Tix(show_all=show_all)
     app.run()
+
+
+@click.group()
+def template():
+    """Manage task templates"""
+    pass
+
+
+@template.command("save")
+@click.argument("task_id", type=int)
+@click.argument("name")
+def save_template(task_id, name):
+    """Save a task as a template"""
+    task = storage.get_task(task_id)   
+    if not task:
+        console.print(f"[red]✗[/red] Task {task_id} not found")
+        return
+
+    template_storage.save_template(task, name)
+    console.print(f"[green]✔[/green] Saved task {task_id} as template '{name}'")
+
+
+@template.command("list")
+def list_templates():
+    """List all saved templates"""
+    templates = template_storage.list_templates()
+    if not templates:
+        console.print("[dim]No templates saved yet[/dim]")
+        return
+
+    console.print("[bold]Templates:[/bold]")
+    for t in templates:
+        console.print(f"  • {t}")
+
+
+# Register group with main CLI
+cli.add_command(template)
+
 
 if __name__ == '__main__':
     cli()
