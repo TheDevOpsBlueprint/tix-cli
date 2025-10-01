@@ -61,6 +61,8 @@ def test_backward_compatibility(temp_storage):
     """Test reading old format (plain list) and upgrading"""
     old_data = [{"id": 5, "text": "legacy", "priority": "low", "tags": [], "completed": False}]
     temp_storage.storage_path.write_text(json.dumps(old_data))
+    # Force reload after overwriting file manually
+    temp_storage._load_index()
 
     tasks = temp_storage.load_tasks()
     assert len(tasks) == 1
@@ -74,3 +76,44 @@ def test_backward_compatibility(temp_storage):
     assert isinstance(data, dict)
     assert "next_id" in data
     assert "tasks" in data
+
+
+
+# --- new tests below ---
+
+def test_pagination(temp_storage):
+    """Test pagination with list_tasks"""
+    for i in range(25):
+        temp_storage.add_task(f"Task {i}")
+
+    page1 = temp_storage.list_tasks(page=1, page_size=10)
+    page2 = temp_storage.list_tasks(page=2, page_size=10)
+
+    assert len(page1) == 10
+    assert len(page2) == 10
+    assert page1[0].text == "Task 0"
+    assert page2[0].text == "Task 10"
+
+
+def test_lazy_iteration(temp_storage):
+    """Test lazy iteration with iter_tasks"""
+    for i in range(5):
+        temp_storage.add_task(f"Lazy {i}")
+
+    tasks = list(temp_storage.iter_tasks(0, 3))
+    assert len(tasks) == 3
+    assert tasks[0].text.startswith("Lazy")
+
+
+def test_active_and_completed(temp_storage):
+    """Test filtering active and completed tasks"""
+    t1 = temp_storage.add_task("Active task")
+    t2 = temp_storage.add_task("Completed task")
+    t2.mark_done()
+    temp_storage.update_task(t2)
+
+    active = temp_storage.get_active_tasks()
+    completed = temp_storage.get_completed_tasks()
+
+    assert any(t.text == "Active task" for t in active)
+    assert any(t.text == "Completed task" for t in completed)
