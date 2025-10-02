@@ -45,6 +45,7 @@ tix add "My task"  # Start managing tasks!
 - **Auto Shell Completion**: Tab completion works out of the box for bash, zsh, and fish
 - **Attachments & Links**: Attach files or add reference URLs to tasks
 - **Open Attachments**: Use `tix open <id>` to quickly open all files/links for a task
+- **Task Templates**: Save common tasks as templates and reuse them for quick creation
 
 ## About Interactive (TUI) Mode
 
@@ -350,6 +351,32 @@ tix report -f json -o tasks.json
 tix report --output my-tasks.txt
 ```
 
+#### Task Templates
+
+```bash
+# Save an existing task as a template
+tix template save <task_id> <template_name>
+# Example: save task #2 as 'pr-template'
+tix template save 2 pr-template
+
+# List all saved templates
+tix template list
+
+# Create a new task from a template
+tix add --template <template_name>
+# Example: create a task from 'pr-template'
+tix add --template pr-template
+
+# Override template values when creating a new task
+tix add --template pr-template --priority high --tag urgent
+
+# Templates are stored in ~/.tix/templates/
+
+# If a template does not exist, tix will notify you
+
+# Each add --template creates a new task with the template fields
+```
+
 ## 🎨 Using Tab Completion
 
 Tab completion works automatically after installation:
@@ -410,6 +437,9 @@ Example structure:
 | `stats` | Show statistics | `tix stats -d` |
 | `report` | Generate report | `tix report -f json -o tasks.json` |
 | `open` | Open attachments and links for a task | `tix open 1` |
+| `template save` | Save a task as a template | `tix template save 2 pr-template` |
+| `template list` | List all saved templates | `tix template list` |
+| `add --template` | Create a new task from a template | `tix add --template pr-template -p high -t urgent` |
 
 ## 🗑️ Uninstalling TIX
 
