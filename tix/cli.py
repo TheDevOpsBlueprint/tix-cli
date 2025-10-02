@@ -11,7 +11,6 @@ import platform
 import os
 import sys
 from .utils import get_date
-from datetime import datetime
 from importlib import import_module
 
 console = Console()
@@ -38,33 +37,60 @@ def cli(ctx):
 
 
 @cli.command()
-@click.argument('task')
-@click.option('--priority', '-p', default='medium',
+@click.argument('task', required=False)  # can be omitted if using a template
+@click.option('--priority', '-p', default=None,
               type=click.Choice(['low', 'medium', 'high']),
-              help='Set task priority')
+              help='Set task priority (overrides template)')
 @click.option('--tag', '-t', multiple=True, help='Add tags to task')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
 @click.option("--due", "-d", help="Due date of task")
 @click.option('--global', 'is_global', is_flag=True, help='Make task visible in all contexts')
-def add(task, priority, tag, attach, link, due, is_global):
-    """Add a new task"""
-    if not task or not task.strip():
+@click.option('--template', '-T', help='Create task from saved template')
+def add(task, priority, tag, attach, link, due, is_global, template):
+    """Add a new task (optionally from a saved template)."""
+
+    # --- Load template if requested ---
+    template_data = {}
+    if template:
+        template_data = template_storage.load_template(template)
+        if not template_data:
+            console.print(f"[red]✗[/red] Template '{template}' not found")
+            sys.exit(1)
+
+    # --- Build final values (template provides defaults, CLI overrides them) ---
+    text = (task.strip() if isinstance(task, str) and task.strip() else None) or template_data.get("text")
+    if not text:
         console.print("[red]✗[/red] Task text cannot be empty")
         sys.exit(1)
-    date = get_date(due)
-    if due and not date:
-        console.print("[red]Error processing date")
-        sys.exit(1)
 
-    new_task = storage.add_task(task, priority, list(tag), due=date, is_global=is_global)
-    # Handle attachments
+    chosen_priority = priority if priority is not None else template_data.get("priority", "medium")
+
+    template_tags = template_data.get("tags", []) if template_data else []
+    tags = list(dict.fromkeys(template_tags + list(tag)))  # dedupe while preserving order
+
+    template_links = template_data.get("links", []) if template_data else []
+    links = template_links + list(link)
+
+    date = None
+    if due:
+        parsed = get_date(due)
+        if not parsed:
+            console.print("[red]Error processing date[/red]")
+            sys.exit(1)
+        date = parsed
+    else:
+        date = template_data.get("due") if template_data else None
+
+    new_task = storage.add_task(text, chosen_priority, tags, due=date, is_global=is_global)
+
+    # --- Attachments (CLI only for now) ---
     if attach:
         attachment_dir = Path.home() / ".tix" / "attachments" / str(new_task.id)
         attachment_dir.mkdir(parents=True, exist_ok=True)
         for file_path in attach:
             try:
-                src = Path(file_path).expanduser().resolve()  
+                src = Path(file_path).expanduser().resolve()
                 if not src.exists():
                     console.print(f"[red]✗[/red] File not found: {file_path}")
                     continue
@@ -74,21 +100,20 @@ def add(task, priority, tag, attach, link, due, is_global):
             except Exception as e:
                 console.print(f"[red]✗[/red] Failed to attach {file_path}: {e}")
 
-    # Handle links
-    if link:
-        new_task.links.extend(link)
+    if links:
+        new_task.links = links
 
+    # Save updated task (with attachments/links)
     storage.update_task(new_task)
 
-    color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
-    
+    color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[chosen_priority]
     global_indicator = " [dim](global)[/dim]" if is_global else ""
-    console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]{global_indicator}")
-    if tag:
-        console.print(f"[dim]  Tags: {', '.join(tag)}[/dim]")
-    if attach or link:
+    console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{text}[/{color}]{global_indicator}")
+    if tags:
+        console.print(f"[dim]  Tags: {', '.join(tags)}[/dim]")
+    if attach or links:
         console.print(f"[dim]  Attachments/Links added[/dim]")
-    
+
     # Show current context if not default
     active_context = context_storage.get_active_context()
     if active_context != "default":
@@ -336,13 +361,19 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link, due):
             console.print("[red]Error updating due date. Try again with proper format")
     # Handle attachments
     if attach:
-        attachment_dir = Path.home() / ".tix/attachments" / str(task.id)
+        attachment_dir = Path.home() / ".tix" / "attachments" / str(task.id)
         attachment_dir.mkdir(parents=True, exist_ok=True)
         for file_path in attach:
-            src = Path(file_path)
-            dest = attachment_dir / src.name
-            dest.write_bytes(src.read_bytes())
-            task.attachments.append(str(dest))
+            try:
+                src = Path(file_path).expanduser().resolve()
+                if not src.exists():
+                    console.print(f"[red]✗[/red] File not found: {file_path}")
+                    continue
+                dest = attachment_dir / src.name
+                dest.write_bytes(src.read_bytes())
+                task.attachments.append(str(dest))
+            except Exception as e:
+                console.print(f"[red]✗[/red] Failed to attach {file_path}: {e}")
         changes.append(f"attachments added: {[Path(f).name for f in attach]}")
 
     # Handle links
