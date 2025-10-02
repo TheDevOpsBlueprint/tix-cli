@@ -46,6 +46,56 @@ tix add "My task"  # Start managing tasks!
 - **Attachments & Links**: Attach files or add reference URLs to tasks
 - **Open Attachments**: Use `tix open <id>` to quickly open all files/links for a task
 
+## About Interactive (TUI) Mode
+
+TIX also includes an interactive, Textual-based terminal user interface (TUI). This TUI lets you manage tasks without typing individual commands, with real-time updates, keyboard shortcuts, and mouse support. Launch it with `tix interactive`.
+
+## Using the Interactive Window
+
+- **Launch**
+  - `tix interactive` starts the Textual TUI
+  - Shows both active and completed tasks; updates in real time
+
+- **Task List**
+  - Columns: ID | ✔ | priority | task | tags
+  - Completed tasks show ✔ and appear styled accordingly
+  - Live refresh after any change
+
+- **Navigation**
+  - Arrows: move selection up/down/left/right
+  - Mouse: clicking any cell selects that row
+
+- **Actions**
+  - a (add): opens a prompt to add a new task (Enter to save)
+  - d (done/undo): toggles completion for the selected task
+  - e (edit): context-aware based on selected column
+    - On priority column: cycles priority low → medium → high
+    - On tags column: opens tags prompt; enter comma-separated tags (e.g., "bug, urgent")
+    - On any other column: opens text prompt to edit the task text
+  - Enter (in dialogs): confirms and saves
+  - Esc (in search mode): exits the search field and restores full list
+  - q (quit): exits the TUI
+
+- **Search (In-List Filtering)**
+  - / (slash): focuses the search field
+  - Live filtering while typing; supports structured syntax and free text
+  - Free text: matches task text (case-insensitive)
+  - Structured tokens:
+    - Priority: `p:l`, `p:m`, `p:h` (also accepts `low|medium|high`)
+    - Tags (OR match): `t:[tag1,tag2]` or `tags:[tag1, tag2]` (matches tasks having at least one tag)
+    - Text: `text:foo` or `task:foo`
+    - Status: `status:done|active` or `s:done|active` (optional)
+  - Examples:
+    - `p:m` → medium priority
+    - `t:[bug, urgent]` → has bug OR urgent tag
+    - `status:done p:h deploy` → completed, high priority, and text contains "deploy"
+
+- **Persistence**
+  - All operations read/write the existing JSON storage; changes are immediately saved
+
+- **Footer/Help**
+  - In-app hint line: `a add | d done | e edit | / search | q quit`
+
 ## 📖 Installation Methods
 
 ### Recommended: One-Command Install
@@ -609,6 +659,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 Built with:
 - [Click](https://click.palletsprojects.com/) - CLI framework with native completion support
 - [Rich](https://rich.readthedocs.io/) - Terminal formatting
+- [Textual](https://textual.textualize.io/) - Terminal UI framework used for the TUI
 - [Python](https://python.org/) - Programming language
 
 ## 📞 Support
