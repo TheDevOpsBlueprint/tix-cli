@@ -1,0 +1,40 @@
+# Defaults for new tasks
+defaults:
+  priority: medium      # low, medium, high
+  tags: []              # e.g. [work, urgent]
+
+# Colors
+colors:
+  priority:
+    low: green
+    medium: yellow
+    high: red
+  status:
+    active: blue
+    completed: green
+  tags: cyan
+
+# Aliases
+aliases:
+  l: ls
+  a: add
+  d: done
+  r: rm
+  e: edit
+  p: priority
+  s: search
+  f: filter
+
+# Notifications
+notifications:
+  enabled: true
+  on_creation: true
+  on_update: true
+  on_completion: true
+
+# Display
+display:
+  show_ids: true
+  show_dates: false
+  compact_mode: false
+  max_text_length: 0

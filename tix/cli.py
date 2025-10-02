@@ -5,90 +5,72 @@ from pathlib import Path
 from tix.storage.json_storage import TaskStorage
 from tix.storage.context_storage import ContextStorage
 from tix.storage.archive_storage import ArchiveStorage
+from rich.prompt import Prompt
+from rich.markdown import Markdown
 from datetime import datetime
-import subprocess
-import platform
-import os
-import sys
-from .utils import get_date
-from datetime import datetime
-from importlib import import_module
 
 console = Console()
 storage = TaskStorage()
 context_storage = ContextStorage()
 archive_storage = ArchiveStorage()
 
+from .storage import storage
+from .config import CONFIG
+from .context import context_storage
 
-@click.group(invoke_without_command=True)
-@click.version_option(version="0.8.0", prog_name="tix")
-@click.pass_context
-def cli(ctx):
-    """⚡ TIX - Lightning-fast terminal task manager
 
-    Quick start:
-      tix add "My task" -p high    # Add a high priority task
-      tix ls                        # List all active tasks
-      tix done 1                    # Mark task #1 as done
-      tix context list              # List all contexts
-      tix --help                    # Show all commands
-    """
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(ls)
+console = Console()
+
+
+@click.group()
+def cli():
+    """TIX - Lightning-fast Terminal Task Manager ⚡"""
+    pass
 
 
 @cli.command()
-@click.argument('task')
-@click.option('--priority', '-p', default='medium',
-              type=click.Choice(['low', 'medium', 'high']),
-              help='Set task priority')
-@click.option('--tag', '-t', multiple=True, help='Add tags to task')
-@click.option('--attach', '-f', multiple=True, help='Attach file(s)')
-@click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-@click.option("--due", "-d", help="Due date of task")
-@click.option('--global', 'is_global', is_flag=True, help='Make task visible in all contexts')
-def add(task, priority, tag, attach, link, due, is_global):
+@click.argument("task")
+@click.option("--priority", type=click.Choice(["low", "medium", "high"]))
+@click.option("--tag", multiple=True, help="Add one or more tags")
+@click.option("--date", help="Due date (YYYY-MM-DD)")
+@click.option("--global", "is_global", is_flag=True, help="Make this a global task")
+@click.option("--attach", multiple=True, help="File attachments")
+@click.option("--link", multiple=True, help="Links to attach")
+def add(task, priority, tag, date, is_global, attach, link):
     """Add a new task"""
-    if not task or not task.strip():
-        console.print("[red]✗[/red] Task text cannot be empty")
-        sys.exit(1)
-    date = get_date(due)
-    if due and not date:
-        console.print("[red]Error processing date")
-        sys.exit(1)
 
-    new_task = storage.add_task(task, priority, list(tag), due=date, is_global=is_global)
-    # Handle attachments
+    # Apply config defaults if not provided
+    if priority is None:
+        priority = CONFIG.get("defaults", {}).get("priority", "medium")
+
+    # Merge config default tags with provided tags
+    default_tags = CONFIG.get("defaults", {}).get("tags", [])
+    all_tags = list(set(list(tag) + default_tags))
+
+    # Add task
+    new_task = storage.add_task(task, priority, all_tags, due=date, is_global=is_global)
+
+    # Handle attachments and links
     if attach:
-        attachment_dir = Path.home() / ".tix" / "attachments" / str(new_task.id)
-        attachment_dir.mkdir(parents=True, exist_ok=True)
-        for file_path in attach:
-            try:
-                src = Path(file_path).expanduser().resolve()  
-                if not src.exists():
-                    console.print(f"[red]✗[/red] File not found: {file_path}")
-                    continue
-                dest = attachment_dir / src.name
-                dest.write_bytes(src.read_bytes())
-                new_task.attachments.append(str(dest))
-            except Exception as e:
-                console.print(f"[red]✗[/red] Failed to attach {file_path}: {e}")
-
-    # Handle links
+        storage.add_attachments(new_task.id, attach)
     if link:
-        new_task.links.extend(link)
+        storage.add_links(new_task.id, link)
 
     storage.update_task(new_task)
 
-    color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
-    
+    # Priority colors (configurable, fallback to defaults)
+    priority_colors = CONFIG.get("colors", {}).get("priority", {})
+    color = priority_colors.get(priority, {"high": "red", "medium": "yellow", "low": "green"}[priority])
+
     global_indicator = " [dim](global)[/dim]" if is_global else ""
     console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]{global_indicator}")
-    if tag:
-        console.print(f"[dim]  Tags: {', '.join(tag)}[/dim]")
+
+    if all_tags:
+        tag_color = CONFIG.get("colors", {}).get("tags", "cyan")
+        console.print(f"[dim]  Tags: [{tag_color}]{', '.join(all_tags)}[/{tag_color}][/dim]")
     if attach or link:
         console.print(f"[dim]  Attachments/Links added[/dim]")
-    
+
     # Show current context if not default
     active_context = context_storage.get_active_context()
     if active_context != "default":
@@ -96,71 +78,84 @@ def add(task, priority, tag, attach, link, due, is_global):
 
 
 @cli.command()
-@click.option("--all", "-a", is_flag=True, help="Show completed tasks too")
-def ls(all):
-    """List all tasks"""
-    tasks = storage.load_tasks() if all else storage.get_active_tasks()
-
-    if not tasks:
-        console.print("[dim]No tasks found. Use 'tix add' to create one![/dim]")
-        return
-
+@click.option("--all", "show_all", is_flag=True, help="Show all tasks including completed")
+def ls(show_all):
+    """List tasks"""
     active_context = context_storage.get_active_context()
-    title = "Tasks" if not all else "All Tasks"
+    title = "Tasks" if not show_all else "All Tasks"
     if active_context != "default":
         title += f" [dim]({active_context})[/dim]"
 
+    # Display + color settings
+    display_config = CONFIG.get("display", {})
+    show_ids = display_config.get("show_ids", True)
+    show_dates = display_config.get("show_dates", False)
+    compact_mode = display_config.get("compact_mode", False)
+    max_text_length = display_config.get("max_text_length", 0)
+
+    priority_colors = CONFIG.get("colors", {}).get("priority", {})
+    status_colors = CONFIG.get("colors", {}).get("status", {})
+    tag_color = CONFIG.get("colors", {}).get("tags", "cyan")
+
     table = Table(title=title)
-    table.add_column("ID", style="cyan", width=4)
+    if show_ids:
+        table.add_column("ID", style="cyan", width=4)
     table.add_column("✔", width=3)
     table.add_column("Priority", width=8)
     table.add_column("Task")
-    table.add_column("Tags", style="dim")
+    if not compact_mode:
+        table.add_column("Tags", style=tag_color)
+    if show_dates:
+        table.add_column("Created", style="dim")
     table.add_column("Due Date")
     table.add_column("Scope", style="dim", width=6)
-    count = dict()
 
-    for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
-        status = "✔" if task.completed else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
-        tags_str = ", ".join(task.tags) if task.tags else ""
-        due_date_str = ""
-        if task.due:
-            due_date = datetime.strptime(task.due, r"%Y-%m-%d")
-            if due_date < datetime.today():
-                due_date_str = f"[red]{task.due}"
-            else:
-                due_date_str = task.due
-        scope = "global" if task.is_global else "local"
+    tasks = storage.list_tasks(include_completed=show_all, context=active_context)
 
-        # Show paperclip if task has attachments or links
-        attach_icon = " 📎" if task.attachments or task.links else ""
+    if not tasks:
+        console.print("[yellow]No tasks found.[/yellow]")
+        return
 
-        task_style = "dim strike" if task.completed else ""
-        table.add_row(
-            str(task.id),
-            status,
-            f"[{priority_color}]{task.priority}[/{priority_color}]",
-            f"[{task_style}]{task.text}[/{task_style}]{attach_icon}" if task.completed else f"{task.text}{attach_icon}",
-            tags_str,
-            due_date_str,
-            scope
-        )
-        count[task.completed] = count.get(task.completed, 0) + 1
+    now = datetime.now().date()
+
+    for t in tasks:
+        status_symbol = "✔" if t.status == "done" else " "
+        color = priority_colors.get(t.priority, {"high": "red", "medium": "yellow", "low": "green"}[t.priority])
+        status_color = status_colors.get(t.status, "white")
+
+        task_text = t.task
+        if max_text_length and len(task_text) > max_text_length:
+            task_text = task_text[: max_text_length - 3] + "..."
+
+        row = []
+        if show_ids:
+            row.append(str(t.id))
+        row.append(status_symbol)
+        row.append(f"[{color}]{t.priority}[/{color}]")
+        row.append(f"[{status_color}]{task_text}[/{status_color}]")
+        if not compact_mode:
+            row.append(", ".join(t.tags))
+        if show_dates:
+            row.append(t.created.strftime("%Y-%m-%d"))
+        due_display = ""
+        if t.due:
+            try:
+                due_date = datetime.strptime(t.due, "%Y-%m-%d").date()
+                if due_date < now and t.status != "done":
+                    due_display = f"[red]{t.due} (OVERDUE)[/red]"
+                elif due_date == now:
+                    due_display = f"[yellow]{t.due} (TODAY)[/yellow]"
+                else:
+                    due_display = t.due
+            except ValueError:
+                due_display = t.due
+        row.append(due_display)
+        row.append("Global" if t.is_global else "Local")
+
+        table.add_row(*row)
 
     console.print(table)
-    console.print("\n")
-    console.print(f"[cyan]Total tasks:{sum(count.values())}")
-    console.print(f"[red]Active tasks:{count.get(False,0)}")
-    console.print(f"[green]Completed tasks:{count.get(True,0)}")
-
-    # Show summary
-    if all:
-        active = len([t for t in tasks if not t.completed])
-        completed = len([t for t in tasks if t.completed])
-        global_count = len([t for t in tasks if t.is_global])
-        local_count = len(tasks) - global_count
-        console.print(f"\n[dim]Total: {len(tasks)} ({local_count} local, {global_count} global) | Active: {active} | Completed: {completed}[/dim]")
+    console.print(f"[dim]{len(tasks)} tasks listed[/dim]")
 
 
 @cli.command()
@@ -169,169 +164,40 @@ def done(task_id):
     """Mark a task as done"""
     task = storage.get_task(task_id)
     if not task:
-        console.print(f"[red]✗[/red] Task #{task_id} not found")
+        console.print(f"[red]Task {task_id} not found[/red]")
         return
-
-    if task.completed:
-        console.print(f"[yellow]![/yellow] Task #{task_id} already completed")
-        return
-
-    task.mark_done()
-    storage.update_task(task)
-    console.print(f"[green]✔[/green] Completed: {task.text}")
+    storage.mark_done(task_id)
+    console.print(f"[green]✔ Task {task_id} marked as done[/green]")
 
 
 @cli.command()
 @click.argument("task_id", type=int)
-@click.option("--confirm", "-y", is_flag=True, help="Skip confirmation")
-def rm(task_id, confirm):
+def rm(task_id):
     """Remove a task"""
     task = storage.get_task(task_id)
     if not task:
-        console.print(f"[red]✗[/red] Task #{task_id} not found")
+        console.print(f"[red]Task {task_id} not found[/red]")
         return
-
-    if not confirm:
-        if not click.confirm(f"Are you sure you want to delete task #{task_id}: '{task.text}'?"):
-            console.print("[yellow]⚠ Cancelled[/yellow]")
-            return
-
-    if storage.delete_task(task_id):
-        console.print(f"[red]✗[/red] Removed: {task.text}")
+    storage.remove_task(task_id)
+    console.print(f"[red]✖ Task {task_id} removed[/red]")
 
 
 @cli.command()
-@click.option("--completed/--active", default=True, help="Clear completed or active tasks")
-@click.option("--force", "-f", is_flag=True, help="Skip confirmation")
-def clear(completed, force):
-    """Clear multiple tasks at once"""
-    tasks = storage.load_tasks()
-
-    if completed:
-        to_clear = [t for t in tasks if t.completed]
-        remaining = [t for t in tasks if not t.completed]
-        task_type = "completed"
-    else:
-        to_clear = [t for t in tasks if not t.completed]
-        remaining = [t for t in tasks if t.completed]
-        task_type = "active"
-
-    if not to_clear:
-        console.print(f"[yellow]No {task_type} tasks to clear[/yellow]")
-        return
-
-    count = len(to_clear)
-
-    if not force:
-        console.print(f"[yellow]About to clear {count} {task_type} task(s):[/yellow]")
-        for task in to_clear[:5]:  # Show first 5
-            console.print(f"  - {task.text}")
-        if count > 5:
-            console.print(f"  ... and {count - 5} more")
-
-        if not click.confirm("Continue?"):
-            console.print("[dim]Cancelled[/dim]")
-            return
-
-    storage.save_tasks(remaining)
-    console.print(f"[green]✔[/green] Cleared {count} {task_type} task(s)")
+@click.argument("name")
+def context(name):
+    """Switch or create context"""
+    context_storage.set_active_context(name)
+    console.print(f"[blue]Switched to context:[/blue] {name}")
 
 
 @cli.command()
-@click.argument("task_id", type=int)
-def undo(task_id):
-    """Mark a completed task as active again"""
-    task = storage.get_task(task_id)
-    if not task:
-        console.print(f"[red]✗[/red] Task #{task_id} not found")
-        return
-
-    if not task.completed:
-        console.print(f"[yellow]![/yellow] Task #{task_id} is not completed")
-        return
-
-    task.completed = False
-    task.completed_at = None
-    storage.update_task(task)
-    console.print(f"[green]✔[/green] Reactivated: {task.text}")
-
-
-@cli.command(name="done-all")
-@click.argument("task_ids", nargs=-1, type=int, required=True)
-def done_all(task_ids):
-    """Mark multiple tasks as done"""
-    completed = []
-    not_found = []
-    already_done = []
-
-    for task_id in task_ids:
-        task = storage.get_task(task_id)
-        if not task:
-            not_found.append(task_id)
-        elif task.completed:
-            already_done.append(task_id)
-        else:
-            task.mark_done()
-            storage.update_task(task)
-            completed.append((task_id, task.text))
-
-    # Report results
-    if completed:
-        console.print("[green]✔ Completed:[/green]")
-        for tid, text in completed:
-            console.print(f"  #{tid}: {text}")
-
-    if already_done:
-        console.print(f"[yellow]Already done: {', '.join(map(str, already_done))}[/yellow]")
-
-    if not_found:
-        console.print(f"[red]Not found: {', '.join(map(str, not_found))}[/red]")
-
-
-@cli.command()
-@click.argument('task_id', type=int)
-@click.option('--text', '-t', help='New task text')
-@click.option('--priority', '-p', type=click.Choice(['low', 'medium', 'high']), help='New priority')
-@click.option('--add-tag', multiple=True, help='Add tags')
-@click.option('--remove-tag', multiple=True, help='Remove tags')
-@click.option('--attach', '-f', multiple=True, help='Attach file(s)')
-@click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-@click.option("--due", "-d", help="Due date of task")
-def edit(task_id, text, priority, add_tag, remove_tag, attach, link, due):
-    """Edit a task"""
-    task = storage.get_task(task_id)
-    if not task:
-        console.print(f"[red]✗[/red] Task #{task_id} not found")
-        return
-
-    changes = []
-
-    if text:
-        old_text = task.text
-        task.text = text
-        changes.append(f"text: '{old_text}' → '{text}'")
-
-    if priority:
-        old_priority = task.priority
-        task.priority = priority
-        changes.append(f"priority: {old_priority} → {priority}")
-
-    for tag in add_tag:
-        if tag not in task.tags:
-            task.tags.append(tag)
-            changes.append(f"+tag: '{tag}'")
-
-    for tag in remove_tag:
-        if tag in task.tags:
-            task.tags.remove(tag)
-            changes.append(f"-tag: '{tag}'")
-
-    if due:
-        old_date = task.due
-        new_date = get_date(due)
-        if new_date:
-            task.due = new_date
-            changes.append(f"due date: {old_date} → {new_date}")
+def contexts():
+    """List all contexts"""
+    contexts = context_storage.list_contexts()
+    active = context_storage.get_active_context()
+    for c in contexts:
+        if c == active:
+            console.print(f"[cyan]> {c} (active)[/cyan]")
         else:
             console.print("[red]Error updating due date. Try again with proper format")
     # Handle attachments
@@ -829,3 +695,5 @@ def unarchive(task_id):
 
 if __name__ == '__main__':
     cli()
+    console.print(f"  {c}")
+
