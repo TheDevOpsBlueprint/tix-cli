@@ -37,11 +37,3 @@ class TemplateStorage:
     def list_templates(self) -> List[str]:
         """List all template names"""
         return [p.stem for p in sorted(self.storage_dir.glob("*.json"))]
-
-    def delete_template(self, name: str) -> bool:
-        """Delete a template by name"""
-        path = self._template_path(name)
-        if path.exists():
-            path.unlink()
-            return True
-        return False
