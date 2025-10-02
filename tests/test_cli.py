@@ -5,6 +5,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+from tix.storage.json_storage import TaskStorage
+from tix.storage.template_storage import TemplateStorage
+from tix.models import Task
+import tix.cli
+
 
 @pytest.fixture
 def runner():
@@ -308,3 +313,64 @@ def test_open_command_opens_attachments_and_links(runner, tmp_path):
         # Ensure the link was opened (regardless of platform details)
         calls = [str(call_args[0][0][1]) for call_args in mock_popen.call_args_list]
         assert "https://example.com" in calls
+
+
+def test_template_save_and_list(runner, tmp_path):
+    """Test template save and list CLI commands"""
+
+    tasks_file = tmp_path / "tasks.json"
+    tasks_file.write_text('{"next_id": 1, "tasks": []}')
+    task_storage = TaskStorage(tasks_file)
+    template_storage = TemplateStorage(storage_dir=tmp_path)
+
+    task = task_storage.add_task("My task", priority="high")
+
+    # Patch module-level storage objects in tix.cli
+    with patch.object(tix.cli, "storage", task_storage), \
+         patch.object(tix.cli, "template_storage", template_storage):
+
+        # Save template
+        result = runner.invoke(tix.cli.cli, ["template", "save", str(task.id), "my-template"])
+        assert result.exit_code == 0
+        assert "Saved task" in result.output
+        assert "my-template" in result.output
+
+        # List templates
+        result = runner.invoke(tix.cli.cli, ["template", "list"])
+        assert result.exit_code == 0
+        assert "my-template" in result.output
+
+def test_add_task_from_template(runner):
+    """Test adding a task using a saved template"""
+    with runner.isolated_filesystem():
+        # Create empty storage
+        temp_storage = Path.cwd() / "tasks.json"
+        temp_storage.write_text('[]')
+
+        test_storage = TaskStorage(temp_storage)
+
+        # Fake template data
+        fake_template = {
+            "text": "Template task",
+            "priority": "high",
+            "tags": ["work", "urgent"],
+            "links": ["https://example.com"]
+        }
+
+        # Patch both storage and template_storage
+        with patch('tix.cli.storage', test_storage), \
+             patch('tix.cli.template_storage.load_template', return_value=fake_template):
+
+            # Run CLI with template
+            result = runner.invoke(cli, ['add', '--template', 'my_template'])
+            assert result.exit_code == 0
+            assert 'Added task' in result.output
+            assert 'Template task' in result.output
+
+            # Verify task in storage
+            task = test_storage.get_task(1)
+            assert task is not None
+            assert task.text == "Template task"
+            assert task.priority == "high"
+            assert set(task.tags) == {"work", "urgent"}
+            assert task.links == ["https://example.com"]
