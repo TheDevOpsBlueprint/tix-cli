@@ -16,6 +16,7 @@ class Task:
     attachments: List[str] = field(default_factory=list)
     links: List[str] = field(default_factory=list)
     is_global: bool = False  # New field for global tasks
+    archived: bool = False  # New field for soft-deleted tasks
 
     def to_dict(self) -> dict:
         """Convert task to dictionary for JSON serialization"""
@@ -30,7 +31,8 @@ class Task:
             'due':self.due,
             'attachments': self.attachments,
             'links': self.links,
-            'is_global': self.is_global
+            'is_global': self.is_global,
+            'archived': self.archived
         }
 
     @classmethod
@@ -45,6 +47,8 @@ class Task:
             data['links'] = []
         if 'is_global' not in data:
             data['is_global'] = False
+        if 'archived' not in data:
+            data['archived'] = False
         return cls(**data)
 
     def mark_done(self):

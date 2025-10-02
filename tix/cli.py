@@ -4,6 +4,7 @@ from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
 from tix.storage.context_storage import ContextStorage
+from tix.storage.archive_storage import ArchiveStorage
 from datetime import datetime
 import subprocess
 import platform
@@ -16,6 +17,7 @@ from importlib import import_module
 console = Console()
 storage = TaskStorage()
 context_storage = ContextStorage()
+archive_storage = ArchiveStorage()
 
 
 @click.group(invoke_without_command=True)
@@ -781,6 +783,48 @@ def interactive(show_all):
 # Import and register context commands
 from tix.commands.context import context
 cli.add_command(context)
+
+@cli.command()
+@click.argument("task_id", type=int)
+def archive(task_id):
+    """Archive (soft-delete) a task"""
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Task #{task_id} not found")
+        return
+    ArchiveStorage().add_task(task)
+    storage.delete_task(task_id)
+    console.print(f"[yellow]→[/yellow] Archived: {task.text}")
+
+@cli.command()
+def archived():
+    """List archived tasks"""
+    tasks = ArchiveStorage().load_tasks()
+    if not tasks:
+        console.print("[dim]No archived tasks found.[/dim]")
+        return
+    table = Table(title="Archived Tasks")
+    table.add_column("ID", style="cyan", width=4)
+    table.add_column("Task")
+    table.add_column("Priority", width=8)
+    table.add_column("Tags", style="dim")
+    for task in tasks:
+        tags_str = ", ".join(task.tags) if task.tags else ""
+        table.add_row(str(task.id), task.text, task.priority, tags_str)
+    console.print(table)
+
+@cli.command()
+@click.argument("task_id", type=int)
+def unarchive(task_id):
+    """Restore an archived task"""
+    archive = ArchiveStorage()
+    task = archive.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Archived task #{task_id} not found")
+        return
+    storage.add_task(task.text, task.priority, task.tags, due=task.due, is_global=task.is_global)
+    archive.remove_task(task_id)
+    console.print(f"[green]✔[/green] Restored: {task.text}")
 
 
 if __name__ == '__main__':
