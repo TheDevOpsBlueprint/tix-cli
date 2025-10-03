@@ -1,4 +1,3 @@
-# tix/cli.py -- cleaned, drop-in replacement preserving backup/restore feature
 import click
 from rich.console import Console
 from rich.table import Table
@@ -14,65 +13,45 @@ import platform
 import os
 import sys
 from .utils import get_date
+from .storage import storage
+from .config import CONFIG
+from .context import context_storage
+from tix.storage.backup import create_backup, list_backups, restore_from_backup
 
 console = Console()
 storage = TaskStorage()
 context_storage = ContextStorage()
 archive_storage = ArchiveStorage()
 
-from .storage import storage
-from .config import CONFIG
-from .context import context_storage
-# Backup helpers (new)
-from tix.storage.backup import create_backup, list_backups, restore_from_backup
-
-
-console = Console()
-storage = TaskStorage()
-context_storage = ContextStorage()
-
-
-@click.group(invoke_without_command=True)
-@click.version_option(version="0.8.0", prog_name="tix")
-@click.pass_context
 def cli(ctx):
-    """⚡ TIX - Lightning-fast terminal task manager
+        """ TIX - Lightning-fast terminal task manager
 
-    Quick start:
-      tix add "My task" -p high    # Add a high priority task
-      tix ls                        # List all active tasks
-      tix done 1                    # Mark task #1 as done
-      tix context list              # List all contexts
-      tix --help                    # Show all commands
-    """
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(ls)
+        Quick start:
+            tix add "My task" -p high    # Add a high priority task
+            tix ls                        # List all active tasks
+            tix done 1                    # Mark task #1 as done
+            tix context list              # List all contexts
+            tix --help                    # Show all commands
+        """
+        if ctx.invoked_subcommand is None:
+                ctx.invoke(ls)
 
 
-# -----------------------
-# Backup CLI group
-# -----------------------
-@cli.group(help="Backup and restore task data")
 def backup():
     pass
 
 
-@backup.command("create")
-@click.argument("filename", required=False)
-@click.option("--data-file", type=click.Path(), default=None, help="Path to tix data file (for testing/dev)")
 def backup_create(filename, data_file):
     """Create a timestamped backup of your tasks file."""
     try:
         data_path = Path(data_file) if data_file else storage.storage_path
         bpath = create_backup(data_path, filename)
-        console.print(f"[green]✔ Backup created:[/green] {bpath}")
+        console.print(f"[green] Backup created:[/green] {bpath}")
     except Exception as e:
         console.print(f"[red]Backup failed:[/red] {e}")
         raise click.Abort()
 
 
-@backup.command("list")
-@click.option("--data-file", type=click.Path(), default=None, help="Path to tix data file (for testing/dev)")
 def backup_list(data_file):
     """List available backups for the active tasks file."""
     try:
@@ -88,10 +67,6 @@ def backup_list(data_file):
         raise click.Abort()
 
 
-@backup.command("restore")
-@click.argument("backup_file", required=True)
-@click.option("--data-file", type=click.Path(), default=None, help="Path to tix data file (for testing/dev)")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def backup_restore(backup_file, data_file, yes):
     """Restore tasks from a previous backup. Will ask confirmation by default."""
     try:
@@ -101,7 +76,7 @@ def backup_restore(backup_file, data_file, yes):
                 console.print("[yellow]Restore cancelled[/yellow]")
                 return
         restore_from_backup(backup_file, data_path, require_confirm=False)
-        console.print("[green]✔ Restore complete[/green]")
+        console.print("[green] Restore complete[/green]")
     except FileNotFoundError as e:
         console.print(f"[red]Restore failed:[/red] {e}")
         raise click.Abort()
@@ -1154,6 +1129,10 @@ def archive(task_id):
     if not task:
         console.print(f"[red]✗[/red] Task #{task_id} not found")
         return
+    # Check if already archived
+    if ArchiveStorage().get_task(task_id):
+        console.print(f"[yellow]![/yellow] Task #{task_id} is already archived.")
+        return
     ArchiveStorage().add_task(task)
     storage.delete_task(task_id)
     console.print(f"[yellow]→[/yellow] Archived: {task.text}")
@@ -1184,14 +1163,14 @@ def unarchive(task_id):
     if not task:
         console.print(f"[red]✗[/red] Archived task #{task_id} not found")
         return
-    storage.add_task(task.text, task.priority, task.tags, due=task.due, is_global=task.is_global)
+    # Check for ID conflict
+    if storage.get_task(task_id):
+        console.print(f"[red]✗[/red] Cannot unarchive: Task ID #{task_id} already exists in active tasks.")
+        return
+    # Restore the original task object
+    storage.save_task(task)  # Assumes save_task preserves ID and metadata
     archive.remove_task(task_id)
     console.print(f"[green]✔[/green] Restored: {task.text}")
-
-
-if __name__ == '__main__':
-    cli()
-    console.print(f"  {c}")
 
 
 if __name__ == '__main__':

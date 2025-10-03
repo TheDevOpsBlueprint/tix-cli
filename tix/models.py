@@ -15,7 +15,6 @@ class Task:
     attachments: List[str] = field(default_factory=list)
     links: List[str] = field(default_factory=list)
     is_global: bool = False  # New field for global tasks
-    archived: bool = False  # New field for soft-deleted tasks
     links: List[str] = field(default_factory=list)  
 
     def to_dict(self) -> dict:
@@ -31,7 +30,6 @@ class Task:
             'attachments': self.attachments,
             'links': self.links,
             'is_global': self.is_global,
-            'archived': self.archived
         }
 
     @classmethod
@@ -46,8 +44,6 @@ class Task:
             data['links'] = []
         if 'is_global' not in data:
             data['is_global'] = False
-        if 'archived' not in data:
-            data['archived'] = False
         return cls(**data)
         return cls(
             id=data['id'],
