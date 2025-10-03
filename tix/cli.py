@@ -1,23 +1,24 @@
-# tix/cli.py -- cleaned, drop-in replacement preserving backup/restore feature
+from tix.utils import get_date
 import click
-import subprocess
-import platform
-import os
-import sys
 from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
 from tix.storage.context_storage import ContextStorage
-from tix.storage.history import HistoryManager
-from tix.storage.backup import create_backup, list_backups, restore_from_backup
-from tix.models import Task
+from tix.storage.archive_storage import ArchiveStorage
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from datetime import datetime
-from .storage import storage
-from .config import CONFIG
-from .context import context_storage
+import subprocess
+import platform
+import os
+import sys
+from tix.utils import get_date
+from tix.storage.history import HistoryManager
+from tix.storage.backup import create_backup, list_backups, restore_from_backup
+from tix.models import Task
+
+cli = click.Group()
 
 console = Console()
 storage = TaskStorage()
@@ -27,24 +28,8 @@ import json
 
 
 context_storage = ContextStorage()
+archive_storage = ArchiveStorage()
 history = HistoryManager()
-
-@click.group(invoke_without_command=True)
-@click.version_option(version="0.8.0", prog_name="tix")
-@click.pass_context
-def cli(ctx):
-    """⚡ TIX - Lightning-fast terminal task manager
-
-    Quick start:
-      tix add "My task" -p high    # Add a high priority task
-      tix ls                        # List all active tasks
-      tix done 1                    # Mark task #1 as done
-      tix context list              # List all contexts
-      tix --help                    # Show all commands
-    """
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(ls)
-
 # -----------------------
 # Backup CLI group
 # -----------------------
@@ -53,22 +38,17 @@ def backup():
     pass
 
 
-@backup.command("create")
-@click.argument("filename", required=False)
-@click.option("--data-file", type=click.Path(), default=None, help="Path to tix data file (for testing/dev)")
 def backup_create(filename, data_file):
     """Create a timestamped backup of your tasks file."""
     try:
         data_path = Path(data_file) if data_file else storage.storage_path
         bpath = create_backup(data_path, filename)
-        console.print(f"[green]✔ Backup created:[/green] {bpath}")
+        console.print(f"[green] Backup created:[/green] {bpath}")
     except Exception as e:
         console.print(f"[red]Backup failed:[/red] {e}")
         raise click.Abort()
 
 
-@backup.command("list")
-@click.option("--data-file", type=click.Path(), default=None, help="Path to tix data file (for testing/dev)")
 def backup_list(data_file):
     """List available backups for the active tasks file."""
     try:
@@ -84,10 +64,6 @@ def backup_list(data_file):
         raise click.Abort()
 
 
-@backup.command("restore")
-@click.argument("backup_file", required=True)
-@click.option("--data-file", type=click.Path(), default=None, help="Path to tix data file (for testing/dev)")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def backup_restore(backup_file, data_file, yes):
     """Restore tasks from a previous backup. Will ask confirmation by default."""
     try:
@@ -97,7 +73,7 @@ def backup_restore(backup_file, data_file, yes):
                 console.print("[yellow]Restore cancelled[/yellow]")
                 return
         restore_from_backup(backup_file, data_path, require_confirm=False)
-        console.print("[green]✔ Restore complete[/green]")
+        console.print("[green] Restore complete[/green]")
     except FileNotFoundError as e:
         console.print(f"[red]Restore failed:[/red] {e}")
         raise click.Abort()
@@ -271,17 +247,7 @@ def ls(show_all):
         table.add_row(*row)
         count[getattr(task, "completed", False)] = count.get(getattr(task, "completed", False), 0) + 1
 
-    console.print(table)
-    if not compact_mode:
-        console.print("\n")
-    console.print(f"[cyan]Total tasks:{sum(count.values())}")
-    console.print(f"[cyan]Active tasks:{count.get(False, 0)}")
-    console.print(f"[green]Completed tasks:{count.get(True, 0)}")
-
-    if show_all:
-        active = len([t for t in tasks if not getattr(t, "completed", False)])
-        completed = len([t for t in tasks if getattr(t, "completed", False)])
-        console.print(f"\n[dim]Total: {len(tasks)} | Active: {active} | Completed: {completed}[/dim]")
+    # ...existing code...
 
 
 @cli.command()
@@ -420,7 +386,7 @@ def clear(completed, force):
 @click.option('--remove-tag', multiple=True, help='Remove tags')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
+def edit(task_id, text, priority, add_tag, remove_tag, attach, link, due):
     """Edit a task"""
     task = storage.get_task(task_id)
     if not task:
@@ -446,6 +412,28 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
         if tag in getattr(task, "tags", []):
             task.tags.remove(tag)
             changes.append(f"-tag: '{tag}'")
+    if due:
+        new_date = get_date(due)
+        if new_date:
+            old_date = getattr(task, "due", None)
+            task.due = new_date
+            changes.append(f"due date: {old_date} → {new_date}")
+        else:
+            console.print("[red]Error updating due date. Try again with proper format")
+    # Handle attachments
+    if attach:
+        attachment_dir = Path.home() / ".tix/attachments" / str(task.id)
+        attachment_dir.mkdir(parents=True, exist_ok=True)
+        for file_path in attach:
+            src = Path(file_path)
+            dest = attachment_dir / src.name
+            dest.write_bytes(src.read_bytes())
+            task.attachments.append(str(dest))
+        changes.append(f"attachments added: {[Path(f).name for f in attach]}")
+
+    # Handle links
+    if link:
+            console.print("[red]Error processing due date[/red]")
 
     if attach:
         attachment_dir = Path.home() / ".tix" / "attachments" / str(task.id)
@@ -473,6 +461,9 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
 
     if changes:
         storage.update_task(task)
+        console.print(f"[green]✔[/green] Updated task #{task_id}:")
+        for change in changes:
+            console.print(f"  • {change}")
         from tix.config import CONFIG
         if CONFIG.get('notifications', {}).get('on_update', True):
             console.print(f"[green]✔[/green] Updated task #{task_id}:")
@@ -543,6 +534,15 @@ def priority(task_id, priority):
     if not task:
         console.print(f"[red]✗[/red] Task #{task_id} not found")
         return
+
+    old_priority = task.priority
+    task.priority = priority
+    storage.update_task(task)
+
+    color = {"high": "red", "medium": "yellow", "low": "green"}[priority]
+    console.print(
+        f"[green]✔[/green] Changed priority: {old_priority} → [{color}]{priority}[/{color}]"
+    )
     old_priority = getattr(task, "priority", None)
     task.priority = priority
     storage.update_task(task)
@@ -638,6 +638,29 @@ def move(from_id, to_id):
     if from_id == to_id:
         console.print("[yellow]Source and destination IDs are the same[/yellow]")
         return
+
+    source_task = storage.get_task(from_id)
+    if not source_task:
+        console.print(f"[red]✗[/red] Task #{from_id} not found")
+        return
+
+    # Check if destination ID exists
+    dest_task = storage.get_task(to_id)
+    if dest_task:
+        console.print(f"[red]✗[/red] Task #{to_id} already exists")
+        console.print("[dim]Tip: Remove the destination task first or use a different ID[/dim]")
+        return
+
+    # Create new task with new ID
+    tasks = storage.load_tasks()
+    tasks = [t for t in tasks if t.id != from_id]  # Remove old task
+
+    # Create task with new ID
+    source_task.id = to_id
+    tasks.append(source_task)
+
+    # Save all tasks
+    storage.save_tasks(sorted(tasks, key=lambda t: t.id))
     src = storage.get_task(from_id)
     if not src:
         console.print(f"[red]✗[/red] Task #{from_id} not found")
@@ -656,40 +679,6 @@ def move(from_id, to_id):
             storage.update_task(t)
     console.print(f"[green]✔[/green] Moved task from #{from_id} to #{to_id}")
 
-
-@cli.command()
-@click.argument("query")
-@click.option("--tag", "-t", help="Filter by tag")
-@click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
-@click.option("--completed", "-c", is_flag=True, help="Search in completed tasks")
-def search(query, tag, priority, completed):
-    """Search tasks by text"""
-    tasks = storage.load_tasks()
-    if not completed:
-        tasks = [t for t in tasks if not getattr(t, "completed", False)]
-    q = query.lower()
-    results = [t for t in tasks if q in getattr(t, "text", getattr(t, "task", "")).lower()]
-    if tag:
-        results = [t for t in results if tag in getattr(t, "tags", [])]
-    if priority:
-        results = [t for t in results if getattr(t, "priority", None) == priority]
-    if not results:
-        console.print(f"[dim]No tasks matching '{query}'[/dim]")
-        return
-    table = Table()
-    table.add_column("ID", style="cyan", width=4)
-    table.add_column("✔", width=3)
-    table.add_column("Priority", width=8)
-    table.add_column("Task")
-    table.add_column("Tags", style="dim")
-    for t in results:
-        status = "✔" if getattr(t, "completed", False) else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(getattr(t, "priority", "medium"), "yellow")
-        tags_str = ", ".join(getattr(t, "tags", [])) if getattr(t, "tags", None) else ""
-        ttext = getattr(t, "text", getattr(t, "task", ""))
-        highlighted = ttext.replace(query, f"[bold yellow]{query}[/bold yellow]") if query.lower() in ttext.lower() else ttext
-        table.add_row(str(getattr(t, "id", "")), status, f"[{priority_color}]{getattr(t, 'priority', '')}[/{priority_color}]", highlighted, tags_str)
-    console.print(table)
 
 
 # ---- Saved filters: replace the old `filter` command with this group ----
@@ -904,6 +893,30 @@ def tags(no_tags):
 def stats(detailed):
     """Show task statistics"""
     from tix.commands.stats import show_stats
+
+    show_stats(storage)
+
+    if detailed:
+        # Additional detailed stats
+        tasks = storage.load_tasks()
+        if tasks:
+            console.print("\n[bold]Detailed Breakdown:[/bold]\n")
+
+            # Tasks by day
+            from collections import defaultdict
+
+            by_day = defaultdict(list)
+
+            for task in tasks:
+                if task.completed and task.completed_at:
+                    day = datetime.fromisoformat(task.completed_at).date()
+                    by_day[day].append(task)
+
+            if by_day:
+                console.print("[bold]Recent Completions:[/bold]")
+                for day in sorted(by_day.keys(), reverse=True)[:5]:
+                    count = len(by_day[day])
+                    console.print(f"  • {day}: {count} task(s)")
     show_stats(storage)
     if detailed:
         tasks = storage.load_tasks()
@@ -924,56 +937,7 @@ def stats(detailed):
                     console.print(f"  • {day}: {len(by_day[day])} task(s)")
 
 
-@cli.command()
-@click.option('--format', '-f', type=click.Choice(['text', 'json','markdown']), default='text', help='Output format')
-@click.option('--output', '-o', type=click.Path(), help='Output to file')
-def report(format, output):
-    """Generate a task report"""
-    tasks = storage.load_tasks()
-    if not tasks:
-        console.print("[dim]No tasks to report[/dim]")
-        return
-    active = [t for t in tasks if not getattr(t, "completed", False)]
-    completed = [t for t in tasks if getattr(t, "completed", False)]
-    if format == "json":
-        import json
-        report_data = {'generated': datetime.now().isoformat(),
-                       'summary': {'total': len(tasks), 'active': len(active), 'completed': len(completed)},
-                       'tasks': [t.to_dict() for t in tasks]}
-        report_text = json.dumps(report_data, indent=2)
-    elif format == 'markdown':
-        lines = ["# TIX Task Report", "", f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}", "", "## Summary", "", f"- **Total Tasks:** {len(tasks)}", f"- **Active:** {len(active)}", f"- **Completed:** {len(completed)}", ""]
-        for t in active:
-            tags = f" `{', '.join(getattr(t,'tags',[]))}`" if getattr(t,'tags',None) else ""
-            lines.append(f"- [ ] **#{getattr(t,'id','')}** {getattr(t,'text',getattr(t,'task',''))}{tags}")
-        if completed:
-            lines.append("")
-            lines.append("## Completed Tasks")
-            lines.append("")
-            lines.append("| ID | Task | Priority | Tags | Completed At |")
-            lines.append("|---|---|---|---|---|")
-            for t in completed:
-                tags = ", ".join([f"`{x}`" for x in getattr(t,'tags',[])]) if getattr(t,'tags',None) else "-"
-                comp = getattr(t,'completed_at', "-")
-                lines.append(f"| #{getattr(t,'id','')} | ~~{getattr(t,'text',getattr(t,'task',''))}~~ | {getattr(t,'priority','')} | {tags} | {comp} |")
-        report_text = "\n".join(lines)
-    else:
-        lines = ["TIX TASK REPORT", "="*40, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", "", f"Total Tasks: {len(tasks)}", f"Active: {len(active)}", f"Completed: {len(completed)}", "", "ACTIVE TASKS:", "-"*20]
-        for t in active:
-            tags = f" [{', '.join(getattr(t,'tags',[]))}]" if getattr(t,'tags',None) else ""
-            lines.append(f"#{getattr(t,'id','')} [{getattr(t,'priority','')}] {getattr(t,'text',getattr(t,'task',''))}{tags}")
-        lines.append("")
-        lines.append("COMPLETED TASKS:")
-        lines.append("-"*20)
-        for t in completed:
-            tags = f" [{', '.join(getattr(t,'tags',[]))}]" if getattr(t,'tags',None) else ""
-            lines.append(f"#{getattr(t,'id','')} ✔ {getattr(t,'text',getattr(t,'task',''))}{tags}")
-        report_text = "\n".join(lines)
-    if output:
-        Path(output).write_text(report_text)
-        console.print(f"[green]✔[/green] Report saved to {output}")
-    else:
-        console.print(report_text)
+
 
 
 @cli.command()
@@ -984,6 +948,49 @@ def open(task_id):
     if not task:
         console.print(f"[red]✗[/red] Task #{task_id} not found")
         return
+
+    if not task.attachments and not task.links:
+        console.print(f"[yellow]![/yellow] Task {task_id} has no attachments or links")
+        return
+    
+    # Helper to open files cross-platform
+    def safe_open(path_or_url, is_link=False):
+        """Cross-platform safe opener for files and links (non-blocking)."""
+        system = platform.system()
+
+        try:
+            if system == "Linux":
+                if "microsoft" in platform.release().lower():
+                    subprocess.Popen(["explorer.exe", str(path_or_url)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.Popen(["xdg-open", str(path_or_url)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            elif system == "Darwin":  # macOS
+                subprocess.Popen(["open", str(path_or_url)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            elif system == "Windows":
+                subprocess.Popen(["explorer.exe", str(path_or_url)],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            console.print(f"[green]✔[/green] Opened {'link' if is_link else 'file'}: {path_or_url}")
+
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] Could not open {'link' if is_link else 'file'}: {path_or_url} ({e})")
+
+    # Open attachments
+    for file_path in task.attachments:
+        path = Path(file_path)
+        if not path.exists():
+            console.print(f"[red]✗[/red] File not found: {file_path}")
+            continue
+        safe_open(path)   
+
+    # Open links
+    for url in task.links:
+        safe_open(url, is_link=True)  
     if not getattr(task, "attachments", None) and not getattr(task, "links", None):
         console.print(f"[yellow]![/yellow] Task {task_id} has no attachments or links")
         return
@@ -1135,6 +1142,63 @@ def config_edit():
     except Exception as e:
         console.print(f"[red]✗[/red] Failed to open editor: {e}")
         console.print(f"[dim]Try: export EDITOR=vim or export EDITOR=nano[/dim]")
+
+@cli.command()
+@click.argument("task_id", type=int)
+def archive(task_id):
+    """Archive (soft-delete) a task"""
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Task #{task_id} not found")
+        return
+    # Check if already archived
+    if ArchiveStorage().get_task(task_id):
+        console.print(f"[yellow]![/yellow] Task #{task_id} is already archived.")
+        return
+    ArchiveStorage().add_task(task)
+    storage.delete_task(task_id)
+    console.print(f"[yellow]→[/yellow] Archived: {task.text}")
+
+@cli.command()
+def archived():
+    """List archived tasks"""
+    tasks = ArchiveStorage().load_tasks()
+    if not tasks:
+        console.print("[dim]No archived tasks found.[/dim]")
+        return
+    table = Table(title="Archived Tasks")
+    table.add_column("ID", style="cyan", width=4)
+    table.add_column("Task")
+    table.add_column("Priority", width=8)
+    table.add_column("Tags", style="dim")
+    for task in tasks:
+        tags_str = ", ".join(task.tags) if task.tags else ""
+        table.add_row(str(task.id), task.text, task.priority, tags_str)
+    console.print(table)
+
+@cli.command()
+@click.argument("task_id", type=int)
+def unarchive(task_id):
+    """Restore an archived task"""
+    archive = ArchiveStorage()
+    task = archive.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Archived task #{task_id} not found")
+        return
+    # Check for ID conflict
+    if storage.get_task(task_id):
+        console.print(f"[red]✗[/red] Cannot unarchive: Task ID #{task_id} already exists in active tasks.")
+        return
+    # Restore the original task object using supported methods
+    tasks = storage.load_tasks()
+    tasks.append(task)
+    if hasattr(storage, "save_tasks"):
+        storage.save_tasks(tasks)
+    else:
+        for t in tasks:
+            storage.update_task(t)
+    archive.remove_task(task_id)
+    console.print(f"[green]✔[/green] Restored: {task.text}")
 
 
 if __name__ == '__main__':

@@ -13,6 +13,8 @@ class Task:
     completed_at: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     attachments: List[str] = field(default_factory=list)
+    links: List[str] = field(default_factory=list)
+    is_global: bool = False  # New field for global tasks
     links: List[str] = field(default_factory=list)  
 
     def to_dict(self) -> dict:
@@ -27,21 +29,23 @@ class Task:
             'tags': self.tags,
             'attachments': self.attachments,
             'links': self.links,
+            'is_global': self.is_global,
         }
 
     @classmethod
     def from_dict(cls, data: dict):
         """Create task from dictionary (handles old tasks safely)"""
         return cls(
-            id=data['id'],
-            text=data['text'],
+            id=data.get('id'),
+            text=data.get('text'),
             priority=data.get('priority', 'medium'),
             completed=data.get('completed', False),
             created_at=data.get('created_at', datetime.now().isoformat()),
             completed_at=data.get('completed_at'),
             tags=data.get('tags', []),
-            attachments=data.get('attachments', []),  
-            links=data.get('links', [])               
+            attachments=data.get('attachments', []),
+            links=data.get('links', []),
+            is_global=data.get('is_global', False)
         )
 
     def mark_done(self):
