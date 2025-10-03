@@ -16,6 +16,7 @@ from .utils import get_date
 from .storage import storage
 from .config import CONFIG
 from .context import context_storage
+
 from tix.storage.backup import create_backup, list_backups, restore_from_backup
 
 console = Console()
@@ -119,10 +120,6 @@ def restore(backup_file, data_file, yes):
         raise click.Abort()
 
 
-# -----------------------
-# End backup group
-# -----------------------
-
 @cli.command()
 @click.argument('task')
 @click.option('--priority', '-p', default='medium',
@@ -131,18 +128,12 @@ def restore(backup_file, data_file, yes):
 @click.option('--tag', '-t', multiple=True, help='Add tags to task')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-@click.option("--due", "-d", help="Due date of task")
-@click.option('--global', 'is_global', is_flag=True, help='Make task visible in all contexts')
-def add(task, priority, tag, attach, link, due, is_global):
+def add(task, priority, tag, attach, link):
     """Add a new task"""
     from tix.config import CONFIG
 
     if not task or not task.strip():
         console.print("[red]✗[/red] Task text cannot be empty")
-        sys.exit(1)
-    date = get_date(due)
-    if due and not date:
-        console.print("[red]Error processing date")
         sys.exit(1)
 
     # merge default tags from config
@@ -150,7 +141,7 @@ def add(task, priority, tag, attach, link, due, is_global):
     tags = list(default_tags) + list(tag)
     tags = list(dict.fromkeys(tags))  # preserve order, unique
 
-    new_task = storage.add_task(task, priority, tags, due=date, is_global=is_global)
+    new_task = storage.add_task(task, priority, tags)
 
     # Handle attachments
     if attach:
@@ -177,17 +168,11 @@ def add(task, priority, tag, attach, link, due, is_global):
     storage.update_task(new_task)
 
     color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
-    global_indicator = " [dim](global)[/dim]" if is_global else ""
-    console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]{global_indicator}")
+    console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]")
     if tags:
         console.print(f"[dim]  Tags: {', '.join(tags)}[/dim]")
     if attach or link:
         console.print(f"[dim]  Attachments/Links added[/dim]")
-
-    # Show current context if not default
-    active_context = context_storage.get_active_context()
-    if active_context != "default":
-        console.print(f"[dim]  Context: {active_context}[/dim]")
 
 
 @cli.command()
@@ -225,31 +210,15 @@ def ls(show_all):
         table.add_column("Tags", style=tag_color)
     if show_dates:
         table.add_column("Created", style="dim")
-    table.add_column("Due Date")
-    table.add_column("Scope", style="dim", width=6)
 
     count = dict()
-    now = datetime.now().date()
 
     for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
         status = "✔" if getattr(task, "completed", False) else "○"
         priority_color = priority_colors.get(getattr(task, "priority", "medium"),
                                             {'high': 'red', 'medium': 'yellow', 'low': 'green'}[getattr(task, "priority", "medium")])
         tags_str = ", ".join(getattr(task, "tags", [])) if getattr(task, "tags", None) else ""
-        due_date_str = ""
-        if getattr(task, "due", None):
-            try:
-                due_date = datetime.strptime(getattr(task, "due"), r"%Y-%m-%d").date()
-                if due_date < now and not getattr(task, "completed", False):
-                    due_date_str = f"[red]{getattr(task, 'due')}[/red]"
-                elif due_date == now:
-                    due_date_str = f"[yellow]{getattr(task, 'due')}[/yellow]"
-                else:
-                    due_date_str = getattr(task, "due")
-            except Exception:
-                due_date_str = getattr(task, "due")
 
-        scope = "global" if getattr(task, "is_global", False) else "local"
         attach_icon = " 📎" if getattr(task, "attachments", None) or getattr(task, "links", None) else ""
 
         # text truncation
@@ -271,12 +240,14 @@ def ls(show_all):
             row.append(tags_str)
         if show_dates:
             created = getattr(task, "created", getattr(task, "created_at", None))
-            if created and hasattr(created, "strftime"):
-                row.append(created.strftime("%Y-%m-%d"))
+            if created:
+                try:
+                    created_date = datetime.fromisoformat(created).strftime('%Y-%m-%d')
+                    row.append(created_date)
+                except:
+                    row.append("")
             else:
-                row.append(str(created) if created else "")
-        row.append(due_date_str)
-        row.append(scope)
+                row.append("")
         table.add_row(*row)
         count[getattr(task, "completed", False)] = count.get(getattr(task, "completed", False), 0) + 1
 
@@ -429,8 +400,7 @@ def clear(completed, force):
 @click.option('--remove-tag', multiple=True, help='Remove tags')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-@click.option("--due", "-d", help="Due date of task")
-def edit(task_id, text, priority, add_tag, remove_tag, attach, link, due):
+def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
     """Edit a task"""
     task = storage.get_task(task_id)
     if not task:
@@ -517,6 +487,25 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link, due):
             console.print(f"[green]✔[/green] Task #{task_id} updated")
     else:
         console.print("[yellow]No changes made[/yellow]")
+
+
+@cli.command()
+@click.argument("task_id", type=int)
+def undo(task_id):
+    """Mark a completed task as active again"""
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Task #{task_id} not found")
+        return
+
+    if not task.completed:
+        console.print(f"[yellow]![/yellow] Task #{task_id} is not completed")
+        return
+
+    task.completed = False
+    task.completed_at = None
+    storage.update_task(task)
+    console.print(f"[green]✔[/green] Reactivated: {task.text}")
 
 
 @cli.command(name="done-all")
@@ -766,6 +755,62 @@ def filter(priority, tag, completed):
 
 
 @cli.command()
+@click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
+@click.option("--tag", "-t", help="Filter by tag")
+@click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
+def filter(priority, tag, completed):
+    """Filter tasks by criteria"""
+    tasks = storage.load_tasks()
+
+    # Apply filters
+    if priority:
+        tasks = [t for t in tasks if t.priority == priority]
+
+    if tag:
+        tasks = [t for t in tasks if tag in t.tags]
+
+    if completed is not None:
+        tasks = [t for t in tasks if t.completed == completed]
+
+    if not tasks:
+        console.print("[dim]No matching tasks[/dim]")
+        return
+
+    # Build filter description
+    filters = []
+    if priority:
+        filters.append(f"priority={priority}")
+    if tag:
+        filters.append(f"tag='{tag}'")
+    if completed is not None:
+        filters.append("completed" if completed else "active")
+
+    filter_desc = " AND ".join(filters) if filters else "all"
+    console.print(f"[bold]{len(tasks)} task(s) matching [{filter_desc}]:[/bold]\n")
+
+    table = Table()
+    table.add_column("ID", style="cyan", width=4)
+    table.add_column("✓", width=3)
+    table.add_column("Priority", width=8)
+    table.add_column("Task")
+    table.add_column("Tags", style="dim")
+
+    for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
+        status = "✓" if task.completed else "○"
+        priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
+        tags_str = ", ".join(task.tags) if task.tags else ""
+        table.add_row(
+            str(task.id),
+            status,
+            f"[{priority_color}]{task.priority}[/{priority_color}]",
+            task.text,
+            tags_str,
+        )
+
+    console.print(table)
+
+
+@cli.command()
 @click.option("--no-tags", is_flag=True, help="Show tasks without tags")
 def tags(no_tags):
     """List all unique tags or tasks without tags"""
@@ -983,7 +1028,7 @@ def report(format, output):
     completed = [t for t in tasks if getattr(t, "completed", False)]
     if format == "json":
         import json
-        report_data = {'generated': datetime.now().isoformat(), 'context': context_storage.get_active_context(),
+        report_data = {'generated': datetime.now().isoformat(),
                        'summary': {'total': len(tasks), 'active': len(active), 'completed': len(completed)},
                        'tasks': [t.to_dict() for t in tasks]}
         report_text = json.dumps(report_data, indent=2)
@@ -1117,9 +1162,114 @@ def interactive(show_all):
     app.run()
 
 
-# Import and register context commands
-from tix.commands.context import context
-cli.add_command(context)
+@cli.group()
+def config():
+    """Manage TIX configuration settings"""
+    pass
+
+
+@config.command('init')
+def config_init():
+    """Initialize configuration file with defaults"""
+    from tix.config import create_default_config_if_not_exists, get_config_path
+
+    if create_default_config_if_not_exists():
+        console.print(f"[green]✔[/green] Created default config at {get_config_path()}")
+    else:
+        console.print(f"[yellow]![/yellow] Config file already exists at {get_config_path()}")
+
+
+@config.command('show')
+@click.option('--key', '-k', help='Show specific config key (e.g., defaults.priority)')
+def config_show(key):
+    """Show current configuration"""
+    from tix.config import load_config, get_config_value, get_config_path
+    import yaml
+
+    if key:
+        value = get_config_value(key)
+        if value is None:
+            console.print(f"[red]✗[/red] Config key '{key}' not found")
+        else:
+            console.print(f"[cyan]{key}:[/cyan] {value}")
+    else:
+        config = load_config()
+        console.print(f"[bold]Configuration from {get_config_path()}:[/bold]\n")
+        console.print(yaml.dump(config, default_flow_style=False, sort_keys=False))
+
+
+@config.command('set')
+@click.argument('key')
+@click.argument('value')
+def config_set(key, value):
+    """Set a configuration value (e.g., tix config set defaults.priority high)"""
+    from tix.config import set_config_value
+
+    # Try to parse value as YAML to support different types
+    import yaml
+    try:
+        parsed_value = yaml.safe_load(value)
+    except yaml.YAMLError:
+        parsed_value = value
+
+    if set_config_value(key, parsed_value):
+        console.print(f"[green]✔[/green] Set {key} = {parsed_value}")
+    else:
+        console.print(f"[red]✗[/red] Failed to set configuration")
+
+
+@config.command('get')
+@click.argument('key')
+def config_get(key):
+    """Get a configuration value"""
+    from tix.config import get_config_value
+
+    value = get_config_value(key)
+    if value is None:
+        console.print(f"[red]✗[/red] Config key '{key}' not found")
+    else:
+        console.print(f"{value}")
+
+
+@config.command('reset')
+@click.option('--confirm', '-y', is_flag=True, help='Skip confirmation')
+def config_reset(confirm):
+    """Reset configuration to defaults"""
+    from tix.config import DEFAULT_CONFIG, save_config, get_config_path
+
+    if not confirm:
+        if not click.confirm("Are you sure you want to reset configuration to defaults?"):
+            console.print("[yellow]⚠ Cancelled[/yellow]")
+            return
+
+    if save_config(DEFAULT_CONFIG):
+        console.print(f"[green]✔[/green] Reset configuration to defaults at {get_config_path()}")
+    else:
+        console.print(f"[red]✗[/red] Failed to reset configuration")
+
+
+@config.command('path')
+def config_path():
+    """Show path to configuration file"""
+    from tix.config import get_config_path
+    console.print(get_config_path())
+
+
+@config.command('edit')
+def config_edit():
+    """Open configuration file in default editor"""
+    from tix.config import get_config_path, create_default_config_if_not_exists
+
+    create_default_config_if_not_exists()
+    config_path = get_config_path()
+
+    editor = os.environ.get('EDITOR', 'nano')
+    try:
+        subprocess.run([editor, config_path])
+        console.print(f"[green]✔[/green] Configuration edited")
+    except Exception as e:
+        console.print(f"[red]✗[/red] Failed to open editor: {e}")
+        console.print(f"[dim]Try: export EDITOR=vim or export EDITOR=nano[/dim]")
 
 @cli.command()
 @click.argument("task_id", type=int)
