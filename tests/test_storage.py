@@ -3,26 +3,16 @@ import tempfile
 import json
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
-from unittest.mock import patch
 
 
 @pytest.fixture
 def temp_storage():
-    """Create temporary storage for tests with isolated context"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        storage_path = Path(tmpdir) / "test_tasks.json"
-        # Create an isolated test context
-        storage = TaskStorage(storage_path, context="isolated_test")
-        
-        # Override load_tasks to not load global tasks from default context during tests
-        original_load_tasks = storage.load_tasks
-        def isolated_load_tasks():
-            data = storage._read_data()
-            from tix.models import Task
-            return [Task.from_dict(item) for item in data["tasks"]]
-        
-        storage.load_tasks = isolated_load_tasks
-        yield storage
+    """Create temporary storage for tests"""
+    with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+        storage_path = Path(f.name)
+    storage = TaskStorage(storage_path)
+    yield storage
+    storage_path.unlink()  # Clean up
 
 
 def test_add_task(temp_storage):
@@ -32,18 +22,9 @@ def test_add_task(temp_storage):
     assert task.text == "Test task"
     assert task.priority == "high"
     assert "work" in task.tags
-    assert task.is_global == False
 
     task2 = temp_storage.add_task("Another task")
     assert task2.id == 2
-
-
-def test_add_global_task(temp_storage):
-    """Test adding a global task"""
-    task = temp_storage.add_task("Global task", "high", ["work"], is_global=True)
-    assert task.id >= 1  # ID may vary depending on default context state
-    assert task.text == "Global task"
-    assert task.is_global == True
 
 
 def test_get_task(temp_storage):
@@ -81,13 +62,10 @@ def test_backward_compatibility(temp_storage):
     old_data = [{"id": 5, "text": "legacy", "priority": "low", "tags": [], "completed": False}]
     temp_storage.storage_path.write_text(json.dumps(old_data))
 
-    # Make sure we only load tasks from this storage, not from default context
-    temp_storage.context = "isolated_test"
     tasks = temp_storage.load_tasks()
     assert len(tasks) == 1
     assert tasks[0].id == 5
     assert tasks[0].text == "legacy"
-    assert tasks[0].is_global == False  # Should default to False
 
     new_task = temp_storage.add_task("post-upgrade")
     assert new_task.id == 6
@@ -96,4 +74,3 @@ def test_backward_compatibility(temp_storage):
     assert isinstance(data, dict)
     assert "next_id" in data
     assert "tasks" in data
-

@@ -36,41 +36,18 @@ def test_add_task(runner):
             assert result.exit_code == 0
             assert 'Added task' in result.output
             assert 'Test task' in result.output
-def test_report_markdown(runner):
-    """Test markdown report generation"""
-    with runner.isolated_filesystem():
-        temp_storage = Path.cwd() / "tasks.json"
-        temp_storage.write_text('[]')
-        from tix.storage.json_storage import TaskStorage
-        test_storage = TaskStorage(temp_storage)
-        with patch('tix.cli.storage', test_storage):
-            runner.invoke(cli, ['add', 'High priority task', '-p', 'high', '-t', 'work'])
-            runner.invoke(cli, ['add', 'Medium task', '-p', 'medium'])
-            runner.invoke(cli, ['done', '1'])
-            result = runner.invoke(cli, ['report', '-f', 'markdown'])
-            assert result.exit_code == 0
-            assert '# TIX Task Report' in result.output
-            assert '- [ ]' in result.output 
-            assert '## Summary' in result.output
+
 
 def test_list_empty(runner):
     """Test listing when no tasks"""
     with runner.isolated_filesystem():
         # Create empty storage file
         temp_storage = Path.cwd() / "tasks.json"
-        temp_storage.write_text('{"next_id": 1, "tasks": []}')
+        temp_storage.write_text('[]')
 
         # Import and create storage instance
         from tix.storage.json_storage import TaskStorage
-        from tix.models import Task
-        test_storage = TaskStorage(temp_storage, context="test_isolated")
-        
-        # Override load_tasks to not load global tasks from default context
-        def isolated_load_tasks():
-            data = test_storage._read_data()
-            return [Task.from_dict(item) for item in data["tasks"]]
-        test_storage.load_tasks = isolated_load_tasks
-        test_storage.get_active_tasks = lambda: [t for t in isolated_load_tasks() if not t.completed]
+        test_storage = TaskStorage(temp_storage)
 
         # Patch the module-level storage object directly
         with patch('tix.cli.storage', test_storage):

@@ -5,34 +5,13 @@ from tix.models import Task
 
 
 class TaskStorage:
-    """JSON-based storage for tasks with context support"""
+    """JSON-based storage for tasks"""
 
-    def __init__(self, storage_path: Path = None, context: str = None):
-        """Initialize storage with default or custom path and context"""
-        self.context = context or self._get_active_context()
-        
-        # Use context-specific storage path
-        if storage_path:
-            self.storage_path = storage_path
-        else:
-            base_dir = Path.home() / ".tix"
-            if self.context == "default":
-                self.storage_path = base_dir / "tasks.json"
-            else:
-                self.storage_path = base_dir / "contexts" / f"{self.context}.json"
-        
+    def __init__(self, storage_path: Path = None):
+        """Initialize storage with default or custom path"""
+        self.storage_path = storage_path or (Path.home() / ".tix" / "tasks.json")
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_file()
-
-    def _get_active_context(self) -> str:
-        """Get the active context from the context file"""
-        try:
-            active_context_path = Path.home() / ".tix" / "active_context"
-            if active_context_path.exists():
-                return active_context_path.read_text().strip()
-        except:
-            pass
-        return "default"
 
     def _ensure_file(self):
         """Ensure storage file exists"""
@@ -76,45 +55,21 @@ class TaskStorage:
         self.storage_path.write_text(json.dumps(data, indent=2))
 
     def load_tasks(self) -> List[Task]:
-        """Load all tasks from storage, including global tasks from other contexts"""
+        """Load all tasks from storage"""
         data = self._read_data()
-        tasks = [Task.from_dict(item) for item in data["tasks"]]
-        
-        # If not in default context, also load global tasks from default
-        if self.context != "default":
-            try:
-                default_storage = TaskStorage(context="default")
-                default_tasks = [Task.from_dict(item) for item in default_storage._read_data()["tasks"]]
-                global_tasks = [t for t in default_tasks if t.is_global]
-                tasks.extend(global_tasks)
-            except:
-                pass  # If default context doesn't exist, skip
-        
-        return tasks
+        return [Task.from_dict(item) for item in data["tasks"]]
 
     def save_tasks(self, tasks: List[Task]):
-        """Save all tasks to storage (only non-global or current context tasks)"""
+        """Save all tasks to storage"""
         data = self._read_data()
-        
-        # Filter out global tasks if we're not in the default context
-        if self.context != "default":
-            tasks = [t for t in tasks if not t.is_global]
-        
         data["tasks"] = [task.to_dict() for task in tasks]
         self._write_data(data)
 
-    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None,due:str=None, is_global: bool = False) -> Task:
+    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None) -> Task:
         """Add a new task and return it"""
         data = self._read_data()
         new_id = data["next_id"]
-        new_task = Task(id=new_id, text=text, priority=priority, tags=tags or [],due=due, is_global=is_global)
-        
-        # Global tasks can only be added in the default context
-        if is_global and self.context != "default":
-            # Add to default context instead
-            default_storage = TaskStorage(context="default")
-            return default_storage.add_task(text, priority, tags, is_global=True)
-        
+        new_task = Task(id=new_id, text=text, priority=priority, tags=tags or [])
         data["tasks"].append(new_task.to_dict())
         data["next_id"] = new_id + 1
         self._write_data(data)

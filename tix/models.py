@@ -12,11 +12,11 @@ class Task:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     completed_at: Optional[str] = None
     tags: List[str] = field(default_factory=list)
-    due: str = None
     attachments: List[str] = field(default_factory=list)
     links: List[str] = field(default_factory=list)
     is_global: bool = False  # New field for global tasks
     archived: bool = False  # New field for soft-deleted tasks
+    links: List[str] = field(default_factory=list)  
 
     def to_dict(self) -> dict:
         """Convert task to dictionary for JSON serialization"""
@@ -28,7 +28,6 @@ class Task:
             'created_at': self.created_at,
             'completed_at': self.completed_at,
             'tags': self.tags,
-            'due':self.due,
             'attachments': self.attachments,
             'links': self.links,
             'is_global': self.is_global,
@@ -50,6 +49,17 @@ class Task:
         if 'archived' not in data:
             data['archived'] = False
         return cls(**data)
+        return cls(
+            id=data['id'],
+            text=data['text'],
+            priority=data.get('priority', 'medium'),
+            completed=data.get('completed', False),
+            created_at=data.get('created_at', datetime.now().isoformat()),
+            completed_at=data.get('completed_at'),
+            tags=data.get('tags', []),
+            attachments=data.get('attachments', []),  
+            links=data.get('links', [])               
+        )
 
     def mark_done(self):
         """Mark task as completed with timestamp"""
@@ -60,24 +70,3 @@ class Task:
         """Add a tag to the task"""
         if tag not in self.tags:
             self.tags.append(tag)
-
-
-@dataclass
-class Context:
-    """Context model for managing separate workspaces"""
-    name: str
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    description: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        """Convert context to dictionary for JSON serialization"""
-        return {
-            'name': self.name,
-            'created_at': self.created_at,
-            'description': self.description
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict):
-        """Create context from dictionary"""
-        return cls(**data)
