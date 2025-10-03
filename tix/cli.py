@@ -22,6 +22,11 @@ cli = click.Group()
 
 console = Console()
 storage = TaskStorage()
+
+from typing import Optional, Dict, Any
+import json
+
+
 context_storage = ContextStorage()
 archive_storage = ArchiveStorage()
 history = HistoryManager()
@@ -676,62 +681,211 @@ def move(from_id, to_id):
 
 
 
-@cli.command()
+# ---- Saved filters: replace the old `filter` command with this group ----
+from typing import Optional, Dict, Any
+import json
+
+FILTERS_PATH = Path.home() / ".tix" / "filters.json"
+FILTERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _load_saved_filters() -> Dict[str, Dict[str, Any]]:
+    """Return mapping name -> filter-params"""
+    if not FILTERS_PATH.exists():
+        return {}
+    try:
+        with FILTERS_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            return {}
+    except Exception:
+        return {}
+
+
+def _save_saved_filters(filters: Dict[str, Dict[str, Any]]) -> bool:
+    try:
+        with FILTERS_PATH.open("w", encoding="utf-8") as f:
+            json.dump(filters, f, indent=2, sort_keys=True)
+        return True
+    except Exception:
+        return False
+
+
+@cli.group()
+def filter():
+    """Manage and apply saved filters"""
+    pass
+
+
+@filter.command("apply")
 @click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
 @click.option("--tag", "-t", help="Filter by tag")
 @click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
-def filter(priority, tag, completed):
-    """Filter tasks by criteria"""
-    tasks = storage.load_tasks()
+@click.option("--saved", "-s", "saved_name", help="Apply a saved filter by name")
+def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optional[bool], saved_name: Optional[str]):
+    """
+    Apply a filter (immediately). Use --saved <name> to apply saved filters.
+    If --saved is provided, any inline options are ignored (saved filter takes precedence).
+    """
+    # If saved filter requested, load and override CLI params
+    if saved_name:
+        saved = _load_saved_filters().get(saved_name)
+        if not saved:
+            console.print(f"[red]✗[/red] Saved filter '{saved_name}' not found")
+            return
+        priority = saved.get("priority")
+        tag = saved.get("tag")
+        completed = saved.get("completed")
 
-    # Apply filters
+    # Now perform filtering (same UX as previous 'filter' command)
+    tasks = storage.load_tasks() if hasattr(storage, "load_tasks") else []
+
+    # completion filter: None = all, True = completed, False = active
+    if completed is not None:
+        tasks = [t for t in tasks if getattr(t, "completed", False) == completed]
+
     if priority:
-        tasks = [t for t in tasks if t.priority == priority]
+        tasks = [t for t in tasks if getattr(t, "priority", None) == priority]
 
     if tag:
-        tasks = [t for t in tasks if tag in t.tags]
-
-    if completed is not None:
-        tasks = [t for t in tasks if t.completed == completed]
+        tasks = [t for t in tasks if tag in getattr(t, "tags", [])]
 
     if not tasks:
         console.print("[dim]No matching tasks[/dim]")
         return
 
     # Build filter description
-    filters = []
+    filters_desc = []
     if priority:
-        filters.append(f"priority={priority}")
+        filters_desc.append(f"priority={priority}")
     if tag:
-        filters.append(f"tag='{tag}'")
+        filters_desc.append(f"tag='{tag}'")
     if completed is not None:
-        filters.append("completed" if completed else "active")
-
-    filter_desc = " AND ".join(filters) if filters else "all"
+        filters_desc.append("completed" if completed else "active")
+    filter_desc = " AND ".join(filters_desc) if filters_desc else "all"
     console.print(f"[bold]{len(tasks)} task(s) matching [{filter_desc}]:[/bold]\n")
 
     table = Table()
     table.add_column("ID", style="cyan", width=4)
-    table.add_column("✓", width=3)
+    table.add_column("✔", width=3)
     table.add_column("Priority", width=8)
     table.add_column("Task")
     table.add_column("Tags", style="dim")
 
-    for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
-        status = "✓" if task.completed else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
-        tags_str = ", ".join(task.tags) if task.tags else ""
+    for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
+        status = "✔" if getattr(task, "completed", False) else "○"
+        priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(getattr(task, "priority", "medium"), "yellow")
+        tags_str = ", ".join(getattr(task, "tags", [])) if getattr(task, "tags", None) else ""
         table.add_row(
-            str(task.id),
+            str(getattr(task, "id", "")),
             status,
-            f"[{priority_color}]{task.priority}[/{priority_color}]",
-            task.text,
+            f"[{priority_color}]{getattr(task, 'priority', '')}[/{priority_color}]",
+            getattr(task, "text", getattr(task, "task", "")),
             tags_str,
         )
 
     console.print(table)
 
 
+@filter.command("save")
+@click.argument("name")
+@click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
+@click.option("--tag", "-t", help="Filter by tag")
+@click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
+@click.option("--force", "-f", is_flag=True, help="Overwrite existing saved filter of same name")
+def filter_save(name: str, priority: Optional[str], tag: Optional[str], completed: Optional[bool], force: bool):
+    """
+    Save a filter under <name>. Later you can apply it with `tix filter apply --saved <name>`.
+    Example: tix filter save work -t work -p high
+    """
+    filters = _load_saved_filters()
+    if name in filters and not force:
+        console.print(f"[red]✗[/red] A saved filter named '{name}' already exists. Use --force to overwrite.")
+        return
+
+    storage_obj = {
+        "priority": priority,
+        "tag": tag,
+        # store completed as True/False/null
+        "completed": None if completed is None else (True if completed else False),
+        "saved_at": datetime.now().isoformat()
+    }
+
+    # Remove empty keys
+    storage_obj = {k: v for k, v in storage_obj.items() if v is not None}
+    filters[name] = storage_obj
+    if _save_saved_filters(filters):
+        console.print(f"[green]✔[/green] Saved filter '{name}'")
+        # quick usage hint
+        parts = []
+        if "priority" in storage_obj:
+            parts.append(f"-p {storage_obj['priority']}")
+        if "tag" in storage_obj:
+            parts.append(f"-t {storage_obj['tag']}")
+        if "completed" in storage_obj:
+            parts.append("--completed" if storage_obj["completed"] else "--active")
+        if parts:
+            console.print(f"[dim]Use: tix filter apply --saved {name}  (equivalent: tix filter apply {' '.join(parts)})[/dim]")
+    else:
+        console.print(f"[red]✗[/red] Failed to save filter '{name}'")
+
+
+@filter.command("list")
+def filter_list():
+    """List saved filters"""
+    filters = _load_saved_filters()
+    if not filters:
+        console.print("[dim]No saved filters[/dim]")
+        return
+
+    table = Table(title="Saved Filters")
+    table.add_column("Name", style="cyan")
+    table.add_column("Filter", style="dim")
+    table.add_column("Saved At", style="green", width=22)
+
+    for name, obj in sorted(filters.items(), key=lambda x: x[0]):
+        parts = []
+        if "priority" in obj:
+            parts.append(f"priority={obj['priority']}")
+        if "tag" in obj:
+            parts.append(f"tag='{obj['tag']}'")
+        if "completed" in obj:
+            parts.append("completed" if obj["completed"] else "active")
+        filter_desc = " AND ".join(parts) if parts else "all"
+        saved_at = obj.get("saved_at", "-")
+        table.add_row(name, filter_desc, saved_at)
+
+    console.print(table)
+# ---- end saved filters ----
+
+
+
+@cli.command()
+@click.option("--no-tags", is_flag=True, help="Show tasks without tags")
+def tags(no_tags):
+    """List all unique tags or tasks without tags"""
+    tasks = storage.load_tasks()
+    if no_tags:
+        untagged = [t for t in tasks if not getattr(t, "tags", [])]
+        if not untagged:
+            console.print("[dim]All tasks have tags[/dim]")
+            return
+        console.print(f"[bold]{len(untagged)} task(s) without tags:[/bold]\n")
+        for t in untagged:
+            status = "✔" if getattr(t, "completed", False) else "○"
+            console.print(f"{status} #{getattr(t,'id','')}: {getattr(t,'text',getattr(t,'task',''))}")
+    else:
+        tag_counts = {}
+        for t in tasks:
+            for tg in getattr(t, "tags", []):
+                tag_counts[tg] = tag_counts.get(tg, 0) + 1
+        if not tag_counts:
+            console.print("[dim]No tags found[/dim]")
+            return
+        console.print("[bold]Tags in use:[/bold]\n")
+        for tg, cnt in sorted(tag_counts.items(), key=lambda x: (-x[1], x[0])):
+            console.print(f"  • {tg} ({cnt} task{'s' if cnt != 1 else ''})")
 
 
 @cli.command()

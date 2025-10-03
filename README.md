@@ -344,6 +344,54 @@ tix backup restore <file_name>
 ```
 
 
+# 📖 Filters
+
+#### Saved Filters (Saved Searches)
+
+You can save commonly used filters so you don’t have to re-type them every time.
+
+```bash
+# Save a filter named "work" for high-priority tasks tagged "work"
+tix filter save work -t work -p high
+
+# Save filter for completed tasks
+tix filter save done-only --completed
+
+# Overwrite an existing filter (with --force)
+tix filter save work -t work -p medium --force
+````
+
+#### Listing Saved Filters
+
+```bash
+# Show all saved filters
+tix filter list
+```
+
+Example output:
+
+```
+Saved Filters:
+  • work → priority=high AND tag='work'
+  • done-only → completed
+```
+
+#### Applying Saved Filters
+
+```bash
+# Apply a saved filter
+tix filter apply --saved work
+
+# Apply directly without saving
+tix filter apply -p high -t urgent
+
+# Saved filter takes precedence over inline flags
+tix filter apply --saved work -p low   # will still use the saved 'work' filter
+```
+
+⚡ Saved filters are stored in `~/.tix/filters.json`.
+You can edit/remove the file manually, but it’s recommended to use the CLI commands.
+
 ## 🎨 Using Tab Completion
 
 Tab completion works automatically after installation:
