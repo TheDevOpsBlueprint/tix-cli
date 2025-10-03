@@ -208,8 +208,6 @@ tix done 1
 # Mark multiple tasks as done
 tix done-all 1 3 5
 
-# Undo completion (reactivate)
-tix undo 1
 ```
 
 #### Removing Tasks
@@ -227,6 +225,16 @@ tix clear --completed
 
 # Clear all active tasks (careful!)
 tix clear --active --force
+```
+
+#### Undo/Redo Operations
+
+```bash
+# Undo the last operation (add, edit, delete, done, etc.)
+tix undo
+
+# Redo the last undone operation
+tix redo
 ```
 
 ### Advanced Features
