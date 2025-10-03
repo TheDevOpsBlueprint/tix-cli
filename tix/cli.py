@@ -1,20 +1,4 @@
-cli = click.Group()
 from tix.utils import get_date
-import click
-from rich.console import Console
-from rich.table import Table
-from pathlib import Path
-from tix.storage.json_storage import TaskStorage
-from tix.storage.context_storage import ContextStorage
-from tix.storage.archive_storage import ArchiveStorage
-from rich.prompt import Prompt
-from rich.markdown import Markdown
-from datetime import datetime
-import subprocess
-import platform
-import os
-import sys
-
 import click
 from rich.console import Console
 from rich.table import Table
@@ -33,6 +17,8 @@ from tix.utils import get_date
 from tix.storage.history import HistoryManager
 from tix.storage.backup import create_backup, list_backups, restore_from_backup
 from tix.models import Task
+
+cli = click.Group()
 
 console = Console()
 storage = TaskStorage()
