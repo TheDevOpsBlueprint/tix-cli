@@ -35,26 +35,17 @@ class Task:
     @classmethod
     def from_dict(cls, data: dict):
         """Create task from dictionary (handles old tasks safely)"""
-        # Handle legacy tasks without new fields
-        if 'due' not in data:
-            data['due'] = None
-        if 'attachments' not in data:
-            data['attachments'] = []
-        if 'links' not in data:
-            data['links'] = []
-        if 'is_global' not in data:
-            data['is_global'] = False
-        return cls(**data)
         return cls(
-            id=data['id'],
-            text=data['text'],
+            id=data.get('id'),
+            text=data.get('text'),
             priority=data.get('priority', 'medium'),
             completed=data.get('completed', False),
             created_at=data.get('created_at', datetime.now().isoformat()),
             completed_at=data.get('completed_at'),
             tags=data.get('tags', []),
-            attachments=data.get('attachments', []),  
-            links=data.get('links', [])               
+            attachments=data.get('attachments', []),
+            links=data.get('links', []),
+            is_global=data.get('is_global', False)
         )
 
     def mark_done(self):

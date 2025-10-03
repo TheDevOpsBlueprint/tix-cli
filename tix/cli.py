@@ -1,3 +1,5 @@
+cli = click.Group()
+from tix.utils import get_date
 import click
 from rich.console import Console
 from rich.table import Table
@@ -12,50 +14,31 @@ import subprocess
 import platform
 import os
 import sys
-from .utils import get_date
-from .storage import storage
-from .config import CONFIG
-from .context import context_storage
 
+import click
 from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
 from tix.storage.context_storage import ContextStorage
-from tix.storage.history import HistoryManager
-from tix.storage.backup import create_backup, list_backups, restore_from_backup
-from tix.models import Task
+from tix.storage.archive_storage import ArchiveStorage
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from datetime import datetime
-from .storage import storage
-from .config import CONFIG
-from .context import context_storage
+import subprocess
+import platform
+import os
+import sys
+from tix.utils import get_date
+from tix.storage.history import HistoryManager
+from tix.storage.backup import create_backup, list_backups, restore_from_backup
+from tix.models import Task
 
 console = Console()
 storage = TaskStorage()
 context_storage = ContextStorage()
 archive_storage = ArchiveStorage()
-
 history = HistoryManager()
-
-@click.group(invoke_without_command=True)
-@click.version_option(version="0.8.0", prog_name="tix")
-@click.pass_context
-def cli(ctx):
-        """ TIX - Lightning-fast terminal task manager
-
-        Quick start:
-            tix add "My task" -p high    # Add a high priority task
-            tix ls                        # List all active tasks
-            tix done 1                    # Mark task #1 as done
-            tix context list              # List all contexts
-            tix --help                    # Show all commands
-        """
-        if ctx.invoked_subcommand is None:
-                ctx.invoke(ls)
-
-
 # -----------------------
 # Backup CLI group
 # -----------------------
@@ -706,107 +689,6 @@ def move(from_id, to_id):
     console.print(f"[green]✔[/green] Moved task from #{from_id} to #{to_id}")
 
 
-@cli.command()
-@click.argument("query")
-@click.option("--tag", "-t", help="Filter by tag")
-@click.option(
-    "--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority"
-)
-@click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
-@click.option("--completed", "-c", is_flag=True, help="Search in completed tasks")
-def search(query, tag, priority, completed):
-    """Search tasks by text"""
-    tasks = storage.load_tasks()
-
-    # Filter by completion status
-    if not completed:
-        tasks = [t for t in tasks if not t.completed]
-
-    # Filter by query text (case-insensitive)
-    query_lower = query.lower()
-    results = [t for t in tasks if query_lower in t.text.lower()]
-
-    # Filter by tag if specified
-    if tag:
-        results = [t for t in results if tag in t.tags]
-
-    # Filter by priority if specified
-    if priority:
-        results = [t for t in results if t.priority == priority]
-
-    if not results:
-        console.print(f"[dim]No tasks matching '{query}'[/dim]")
-        return
-
-    console.print(f"[bold]Found {len(results)} task(s) matching '{query}':[/bold]\n")
-
-    table = Table()
-    table.add_column("ID", style="cyan", width=4)
-    table.add_column("✔", width=3)
-    table.add_column("Priority", width=8)
-    table.add_column("Task")
-    table.add_column("Tags", style="dim")
-
-    for task in results:
-        status = "✔" if task.completed else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
-        tags_str = ", ".join(task.tags) if task.tags else ""
-
-        # Highlight matching text
-        highlighted_text = (
-            task.text.replace(query, f"[bold yellow]{query}[/bold yellow]")
-            if query.lower() in task.text.lower()
-            else task.text
-        )
-
-        table.add_row(
-            str(task.id),
-            status,
-            f"[{priority_color}]{task.priority}[/{priority_color}]",
-            highlighted_text,
-            tags_str,
-        )
-
-    console.print(table)
-
-
-@cli.command()
-@click.option(
-    "--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority"
-)
-@click.option("--tag", "-t", help="Filter by tag")
-@click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
-def filter(priority, tag, completed):
-    """Filter tasks by criteria"""
-    tasks = storage.load_tasks()
-
-    # Apply filters
-    if priority:
-        tasks = [t for t in tasks if t.priority == priority]
-
-    if tag:
-        tasks = [t for t in tasks if tag in t.tags]
-
-    if completed is not None:
-        tasks = [t for t in tasks if t.completed == completed]
-
-    if not tasks:
-        console.print("[dim]No matching tasks[/dim]")
-        return
-
-    # Build filter description
-    filters = []
-    if priority:
-        filters.append(f"priority={priority}")
-    if tag:
-        filters.append(f"tag='{tag}'")
-    if completed is not None:
-        filters.append("completed" if completed else "active")
-
-    filter_desc = " AND ".join(filters) if filters else "all"
-    console.print(f"[bold]{len(tasks)} task(s) matching [{filter_desc}]:[/bold]\n")
-
-
 
 @cli.command()
 @click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
@@ -864,57 +746,6 @@ def filter(priority, tag, completed):
     console.print(table)
 
 
-@cli.command()
-@click.option("--no-tags", is_flag=True, help="Show tasks without tags")
-def tags(no_tags):
-    """List all unique tags or tasks without tags"""
-    tasks = storage.load_tasks()
-
-    if no_tags:
-        # Show tasks without tags
-        untagged = [t for t in tasks if not t.tags]
-        if not untagged:
-            console.print("[dim]All tasks have tags[/dim]")
-            return
-
-        console.print(f"[bold]{len(untagged)} task(s) without tags:[/bold]\n")
-        for task in untagged:
-            status = "✔" if task.completed else "○"
-            console.print(f"{status} #{task.id}: {task.text}")
-    else:
-        # Show all unique tags with counts
-        tag_counts = {}
-        for task in tasks:
-            for tag in task.tags:
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
-        if not tag_counts:
-            console.print("[dim]No tags found[/dim]")
-            return
-
-        console.print("[bold]Tags in use:[/bold]\n")
-        for tag, count in sorted(tag_counts.items(), key=lambda x: (-x[1], x[0])):
-            console.print(f"  • {tag} ({count} task{'s' if count != 1 else ''})")
-    if no_tags:
-        untagged = [t for t in tasks if not getattr(t, "tags", [])]
-        if not untagged:
-            console.print("[dim]All tasks have tags[/dim]")
-            return
-        console.print(f"[bold]{len(untagged)} task(s) without tags:[/bold]\n")
-        for t in untagged:
-            status = "✔" if getattr(t, "completed", False) else "○"
-            console.print(f"{status} #{getattr(t,'id','')}: {getattr(t,'text',getattr(t,'task',''))}")
-    else:
-        tag_counts = {}
-        for t in tasks:
-            for tg in getattr(t, "tags", []):
-                tag_counts[tg] = tag_counts.get(tg, 0) + 1
-        if not tag_counts:
-            console.print("[dim]No tags found[/dim]")
-            return
-        console.print("[bold]Tags in use:[/bold]\n")
-        for tg, cnt in sorted(tag_counts.items(), key=lambda x: (-x[1], x[0])):
-            console.print(f"  • {tg} ({cnt} task{'s' if cnt != 1 else ''})")
 
 
 @cli.command()
@@ -966,159 +797,6 @@ def stats(detailed):
                     console.print(f"  • {day}: {len(by_day[day])} task(s)")
 
 
-@cli.command()
-@click.option('--format', '-f', type=click.Choice(['text', 'json','markdown']), default='text', help='Output format')
-@click.option('--output', '-o', type=click.Path(), help='Output to file')
-def report(format, output):
-    """Generate a task report"""
-    tasks = storage.load_tasks()
-
-    if not tasks:
-        console.print("[dim]No tasks to report[/dim]")
-        return
-
-    active = [t for t in tasks if not t.completed]
-    completed = [t for t in tasks if t.completed]
-
-    if format == "json":
-        import json
-
-        report_data = {
-            'generated': datetime.now().isoformat(),
-            'context': context_storage.get_active_context(),
-            'summary': {
-                'total': len(tasks),
-                'active': len(active),
-                'completed': len(completed)
-            },
-            'tasks': [t.to_dict() for t in tasks]
-        }
-        report_text = json.dumps(report_data, indent=2)
-    elif format == 'markdown':
-        report_lines = [
-            "# TIX Task Report",
-            "",
-            f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            "",
-            "## Summary",
-            "",
-            f"- **Total Tasks:** {len(tasks)}",
-            f"- **Active:** {len(active)}",
-            f"- **Completed:** {len(completed)}",
-            ""
-        ]
-        priority_order = ['high', 'medium', 'low']
-        active_by_priority = {p: [] for p in priority_order}
-        for task in active:
-            active_by_priority[task.priority].append(task)
-
-        report_lines.extend([
-            "## Active Tasks",
-            "",
-        ])
-        for priority in priority_order:
-            tasks_in_priority = active_by_priority[priority]
-            if tasks_in_priority:
-                priority_emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}
-                report_lines.append(f"### {priority_emoji[priority]} {priority.capitalize()} Priority")
-                report_lines.append("")
-                
-                for task in tasks_in_priority:
-                    tags = f" `{', '.join(task.tags)}`" if task.tags else ""
-                    report_lines.append(f"- [ ] **#{task.id}** {task.text}{tags}")
-                
-                report_lines.append("")
-        if completed:
-            report_lines.extend([
-                "## Completed Tasks",
-                "",
-                "| ID | Task | Priority | Tags | Completed At |",
-                "|---|---|---|---|---|"
-            ])
-            for task in completed:
-                tags = ", ".join([f"`{tag}`" for tag in task.tags]) if task.tags else "-"
-                completed_date = datetime.fromisoformat(task.completed_at).strftime('%Y-%m-%d %H:%M') if task.completed_at else "-"
-                priority_emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}
-                report_lines.append(
-                    f"| #{task.id} | ~~{task.text}~~ | {priority_emoji[task.priority]} {task.priority} | {tags} | {completed_date} |"
-                )
-            report_lines.append("")
-        report_text = "\n".join(report_lines)
-    else:
-        # Text format
-        active_context = context_storage.get_active_context()
-        report_lines = [
-            "TIX TASK REPORT",
-            "=" * 40,
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            f"Context: {active_context}",
-            "",
-            f"Total Tasks: {len(tasks)}",
-            f"Active: {len(active)}",
-            f"Completed: {len(completed)}",
-            "",
-            "ACTIVE TASKS:",
-            "-" * 20,
-        ]
-
-        for task in active:
-            tags = f" [{', '.join(task.tags)}]" if task.tags else ""
-            global_marker = " (global)" if task.is_global else ""
-            report_lines.append(f"#{task.id} [{task.priority}] {task.text}{tags}{global_marker}")
-
-        report_lines.extend(["", "COMPLETED TASKS:", "-" * 20])
-
-        for task in completed:
-            tags = f" [{', '.join(task.tags)}]" if task.tags else ""
-            global_marker = " (global)" if task.is_global else ""
-            report_lines.append(f"#{task.id} ✔ {task.text}{tags}{global_marker}")
-
-        report_text = "\n".join(report_lines)
-
-    if not tasks:
-        console.print("[dim]No tasks to report[/dim]")
-        return
-    active = [t for t in tasks if not getattr(t, "completed", False)]
-    completed = [t for t in tasks if getattr(t, "completed", False)]
-    if format == "json":
-        import json
-        report_data = {'generated': datetime.now().isoformat(), 'context': context_storage.get_active_context(),
-                       'summary': {'total': len(tasks), 'active': len(active), 'completed': len(completed)},
-                       'tasks': [t.to_dict() for t in tasks]}
-        report_text = json.dumps(report_data, indent=2)
-    elif format == 'markdown':
-        lines = ["# TIX Task Report", "", f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}", "", "## Summary", "", f"- **Total Tasks:** {len(tasks)}", f"- **Active:** {len(active)}", f"- **Completed:** {len(completed)}", ""]
-        for t in active:
-            tags = f" `{', '.join(getattr(t,'tags',[]))}`" if getattr(t,'tags',None) else ""
-            lines.append(f"- [ ] **#{getattr(t,'id','')}** {getattr(t,'text',getattr(t,'task',''))}{tags}")
-        if completed:
-            lines.append("")
-            lines.append("## Completed Tasks")
-            lines.append("")
-            lines.append("| ID | Task | Priority | Tags | Completed At |")
-            lines.append("|---|---|---|---|---|")
-            for t in completed:
-                tags = ", ".join([f"`{x}`" for x in getattr(t,'tags',[])]) if getattr(t,'tags',None) else "-"
-                comp = getattr(t,'completed_at', "-")
-                lines.append(f"| #{getattr(t,'id','')} | ~~{getattr(t,'text',getattr(t,'task',''))}~~ | {getattr(t,'priority','')} | {tags} | {comp} |")
-        report_text = "\n".join(lines)
-    else:
-        lines = ["TIX TASK REPORT", "="*40, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", "", f"Total Tasks: {len(tasks)}", f"Active: {len(active)}", f"Completed: {len(completed)}", "", "ACTIVE TASKS:", "-"*20]
-        for t in active:
-            tags = f" [{', '.join(getattr(t,'tags',[]))}]" if getattr(t,'tags',None) else ""
-            lines.append(f"#{getattr(t,'id','')} [{getattr(t,'priority','')}] {getattr(t,'text',getattr(t,'task',''))}{tags}")
-        lines.append("")
-        lines.append("COMPLETED TASKS:")
-        lines.append("-"*20)
-        for t in completed:
-            tags = f" [{', '.join(getattr(t,'tags',[]))}]" if getattr(t,'tags',None) else ""
-            lines.append(f"#{getattr(t,'id','')} ✔ {getattr(t,'text',getattr(t,'task',''))}{tags}")
-        report_text = "\n".join(lines)
-    if output:
-        Path(output).write_text(report_text)
-        console.print(f"[green]✔[/green] Report saved to {output}")
-    else:
-        console.print(report_text)
 
 
 
@@ -1371,8 +1049,14 @@ def unarchive(task_id):
     if storage.get_task(task_id):
         console.print(f"[red]✗[/red] Cannot unarchive: Task ID #{task_id} already exists in active tasks.")
         return
-    # Restore the original task object
-    storage.save_task(task)  # Assumes save_task preserves ID and metadata
+    # Restore the original task object using supported methods
+    tasks = storage.load_tasks()
+    tasks.append(task)
+    if hasattr(storage, "save_tasks"):
+        storage.save_tasks(tasks)
+    else:
+        for t in tasks:
+            storage.update_task(t)
     archive.remove_task(task_id)
     console.print(f"[green]✔[/green] Restored: {task.text}")
 
