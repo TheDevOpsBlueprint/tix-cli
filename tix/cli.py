@@ -160,108 +160,8 @@ def add(task, priority, tag, attach, link):
                 console.print(f"[red]✗[/red] Failed to attach {file_path}: {e}")
 
     # Links
-    if link:
-        if not hasattr(new_task, "links"):
-            new_task.links = []
-        new_task.links.extend(link)
 
-    storage.update_task(new_task)
-
-    color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
-    console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]")
-    if tags:
-        console.print(f"[dim]  Tags: {', '.join(tags)}[/dim]")
-    if attach or link:
-        console.print(f"[dim]  Attachments/Links added[/dim]")
-
-
-@cli.command()
-@click.option("--all", "-a", "show_all", is_flag=True, help="Show completed tasks too")
-def ls(show_all):
-    """List all tasks"""
-    from tix.config import CONFIG
-
-    tasks = storage.load_tasks() if show_all else storage.get_active_tasks()
-
-    if not tasks:
-        console.print("[dim]No tasks found. Use 'tix add' to create one![/dim]")
-        return
-
-    # Get display settings from config
-    display_config = CONFIG.get('display', {})
-    show_ids = display_config.get('show_ids', True)
-    show_dates = display_config.get('show_dates', False)
-    compact_mode = display_config.get('compact_mode', False)
-    max_text_length = display_config.get('max_text_length', 0)
-
-    # color settings
-    priority_colors = CONFIG.get('colors', {}).get('priority', {})
-    status_colors = CONFIG.get('colors', {}).get('status', {})
-    tag_color = CONFIG.get('colors', {}).get('tags', 'cyan')
-
-    title = "All Tasks" if show_all else "Tasks"
-    table = Table(title=title)
-    if show_ids:
-        table.add_column("ID", style="cyan", width=4)
-    table.add_column("✔", width=3)
-    table.add_column("Priority", width=8)
-    table.add_column("Task")
-    if not compact_mode:
-        table.add_column("Tags", style=tag_color)
-    if show_dates:
-        table.add_column("Created", style="dim")
-
-    count = dict()
-
-    for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
-        status = "✔" if getattr(task, "completed", False) else "○"
-        priority_color = priority_colors.get(getattr(task, "priority", "medium"),
-                                            {'high': 'red', 'medium': 'yellow', 'low': 'green'}[getattr(task, "priority", "medium")])
-        tags_str = ", ".join(getattr(task, "tags", [])) if getattr(task, "tags", None) else ""
-
-        attach_icon = " 📎" if getattr(task, "attachments", None) or getattr(task, "links", None) else ""
-
-        # text truncation
-        text_val = getattr(task, "text", getattr(task, "task", ""))
-        if max_text_length and max_text_length > 0 and len(text_val) > max_text_length:
-            text_val = text_val[: max_text_length - 3] + "..."
-
-        task_style = "dim strike" if getattr(task, "completed", False) else ""
-        row = []
-        if show_ids:
-            row.append(str(getattr(task, "id", "")))
-        row.append(status)
-        row.append(f"[{priority_color}]{getattr(task, 'priority', '')}[/{priority_color}]")
-        if getattr(task, "completed", False):
-            row.append(f"[{task_style}]{text_val}[/{task_style}]{attach_icon}")
-        else:
-            row.append(f"{text_val}{attach_icon}")
-        if not compact_mode:
-            row.append(tags_str)
-        if show_dates:
-            created = getattr(task, "created", getattr(task, "created_at", None))
-            if created:
-                try:
-                    created_date = datetime.fromisoformat(created).strftime('%Y-%m-%d')
-                    row.append(created_date)
-                except:
-                    row.append("")
-            else:
-                row.append("")
-        table.add_row(*row)
-        count[getattr(task, "completed", False)] = count.get(getattr(task, "completed", False), 0) + 1
-
-    console.print(table)
-    if not compact_mode:
-        console.print("\n")
-    console.print(f"[cyan]Total tasks:{sum(count.values())}")
-    console.print(f"[cyan]Active tasks:{count.get(False, 0)}")
-    console.print(f"[green]Completed tasks:{count.get(True, 0)}")
-
-    if show_all:
-        active = len([t for t in tasks if not getattr(t, "completed", False)])
-        completed = len([t for t in tasks if getattr(t, "completed", False)])
-        console.print(f"\n[dim]Total: {len(tasks)} | Active: {active} | Completed: {completed}[/dim]")
+    # ...existing code...
 
 
 @cli.command()
@@ -400,7 +300,7 @@ def clear(completed, force):
 @click.option('--remove-tag', multiple=True, help='Remove tags')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
+def edit(task_id, text, priority, add_tag, remove_tag, attach, link, due):
     """Edit a task"""
     task = storage.get_task(task_id)
     if not task:
@@ -714,44 +614,6 @@ def filter(priority, tag, completed):
     filter_desc = " AND ".join(filters) if filters else "all"
     console.print(f"[bold]{len(tasks)} task(s) matching [{filter_desc}]:[/bold]\n")
 
-    if not completed:
-        tasks = [t for t in tasks if not getattr(t, "completed", False)]
-    q = query.lower()
-    results = [t for t in tasks if q in getattr(t, "text", getattr(t, "task", "")).lower()]
-    if tag:
-        results = [t for t in results if tag in getattr(t, "tags", [])]
-    if priority:
-        results = [t for t in results if getattr(t, "priority", None) == priority]
-    if not results:
-        console.print(f"[dim]No tasks matching '{query}'[/dim]")
-        return
-    table = Table()
-    table.add_column("ID", style="cyan", width=4)
-    table.add_column("✔", width=3)
-    table.add_column("Priority", width=8)
-    table.add_column("Task")
-    table.add_column("Tags", style="dim")
-
-    for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
-        status = "✔" if task.completed else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
-        tags_str = ", ".join(task.tags) if task.tags else ""
-        table.add_row(
-            str(task.id),
-            status,
-            f"[{priority_color}]{task.priority}[/{priority_color}]",
-            task.text,
-            tags_str,
-        )
-
-    for t in results:
-        status = "✔" if getattr(t, "completed", False) else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(getattr(t, "priority", "medium"), "yellow")
-        tags_str = ", ".join(getattr(t, "tags", [])) if getattr(t, "tags", None) else ""
-        ttext = getattr(t, "text", getattr(t, "task", ""))
-        highlighted = ttext.replace(query, f"[bold yellow]{query}[/bold yellow]") if query.lower() in ttext.lower() else ttext
-        table.add_row(str(getattr(t, "id", "")), status, f"[{priority_color}]{getattr(t, 'priority', '')}[/{priority_color}]", highlighted, tags_str)
-    console.print(table)
 
 
 @cli.command()
@@ -1028,7 +890,7 @@ def report(format, output):
     completed = [t for t in tasks if getattr(t, "completed", False)]
     if format == "json":
         import json
-        report_data = {'generated': datetime.now().isoformat(),
+        report_data = {'generated': datetime.now().isoformat(), 'context': context_storage.get_active_context(),
                        'summary': {'total': len(tasks), 'active': len(active), 'completed': len(completed)},
                        'tasks': [t.to_dict() for t in tasks]}
         report_text = json.dumps(report_data, indent=2)
