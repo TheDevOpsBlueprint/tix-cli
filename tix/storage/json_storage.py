@@ -158,3 +158,55 @@ class TaskStorage:
     def get_attachment_dir(self, task_id: int) -> Path:
         """Return the path where attachments for a task should be stored"""
         return Path.home() / ".tix" / "attachments" / str(task_id)
+
+    def add_subtask(self, parent_id: int, subtask_text: str, priority: str = 'medium', tags: List[str] = None) -> Task:
+        """Add a subtask to a parent task"""
+        parent_task = self.get_task(parent_id)
+        if not parent_task:
+            raise ValueError(f"Parent task {parent_id} not found")
+        
+        # Check nesting depth (max 2 levels)
+        if parent_task.is_subtask():
+            raise ValueError("Cannot add subtasks to subtasks (max 2 levels)")
+        
+        # Create the subtask
+        subtask = self.add_task(subtask_text, priority, tags or [])
+        subtask.parent_id = parent_id
+        
+        # Add subtask to parent's subtask list
+        parent_task.add_subtask(subtask.id)
+        
+        # Save both tasks
+        self.update_task(subtask)
+        self.update_task(parent_task)
+        
+        return subtask
+
+    def get_subtasks(self, parent_id: int) -> List[Task]:
+        """Get all subtasks for a parent task"""
+        tasks = self.load_tasks()
+        return [task for task in tasks if task.parent_id == parent_id]
+
+    def get_task_progress(self, task_id: int) -> tuple[int, int]:
+        """Get progress for a task (completed_subtasks, total_subtasks)"""
+        task = self.get_task(task_id)
+        if not task or not task.is_parent_task():
+            return (0, 0)
+        
+        subtasks = self.get_subtasks(task_id)
+        completed_count = sum(1 for subtask in subtasks if subtask.completed)
+        return (completed_count, len(subtasks))
+
+    def delete_task_with_subtasks(self, task_id: int) -> bool:
+        """Delete a task and all its subtasks"""
+        task = self.get_task(task_id)
+        if not task:
+            return False
+        
+        # Delete all subtasks first
+        subtasks = self.get_subtasks(task_id)
+        for subtask in subtasks:
+            self.delete_task(subtask.id)
+        
+        # Delete the parent task
+        return self.delete_task(task_id)

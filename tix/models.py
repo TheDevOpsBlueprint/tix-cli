@@ -15,6 +15,9 @@ class Task:
     attachments: List[str] = field(default_factory=list)
     links: List[str] = field(default_factory=list)
     is_global: bool = False  # New field for global tasks
+    parent_id: Optional[int] = None  # ID of parent task (for subtasks)
+    subtasks: List[int] = field(default_factory=list)  # List of subtask IDs
+    notes: str = ""  # Additional notes/checklist for the task
 
     def to_dict(self) -> dict:
         """Convert task to dictionary for JSON serialization"""
@@ -28,7 +31,10 @@ class Task:
             'tags': self.tags,
             'attachments': self.attachments,
             'links': self.links,
-            'is_global': self.is_global
+            'is_global': self.is_global,
+            'parent_id': self.parent_id,
+            'subtasks': self.subtasks,
+            'notes': self.notes
         }
 
     @classmethod
@@ -41,6 +47,12 @@ class Task:
             data['links'] = []
         if 'is_global' not in data:
             data['is_global'] = False
+        if 'parent_id' not in data:
+            data['parent_id'] = None
+        if 'subtasks' not in data:
+            data['subtasks'] = []
+        if 'notes' not in data:
+            data['notes'] = ""
         return cls(**data)
 
     def mark_done(self):
@@ -52,6 +64,34 @@ class Task:
         """Add a tag to the task"""
         if tag not in self.tags:
             self.tags.append(tag)
+
+    def add_subtask(self, subtask_id: int):
+        """Add a subtask ID to this task"""
+        if subtask_id not in self.subtasks:
+            self.subtasks.append(subtask_id)
+
+    def remove_subtask(self, subtask_id: int):
+        """Remove a subtask ID from this task"""
+        if subtask_id in self.subtasks:
+            self.subtasks.remove(subtask_id)
+
+    def get_subtask_count(self) -> int:
+        """Get the number of subtasks"""
+        return len(self.subtasks)
+
+    def is_parent_task(self) -> bool:
+        """Check if this task has subtasks"""
+        return len(self.subtasks) > 0
+
+    def is_subtask(self) -> bool:
+        """Check if this task is a subtask"""
+        return self.parent_id is not None
+
+    def get_depth_level(self) -> int:
+        """Get the depth level of this task (0 = root, 1 = subtask, 2 = sub-subtask)"""
+        if self.parent_id is None:
+            return 0
+        return 1  # For now, we'll implement 2-level nesting later
 
 
 @dataclass

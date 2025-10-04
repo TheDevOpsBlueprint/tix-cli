@@ -109,6 +109,7 @@ def ls(all):
     table.add_column("✔", width=3)
     table.add_column("Priority", width=8)
     table.add_column("Task")
+    table.add_column("Progress", style="dim", width=12)
     table.add_column("Tags", style="dim")
     table.add_column("Scope", style="dim", width=6)
     
@@ -123,12 +124,28 @@ def ls(all):
         # Show paperclip if task has attachments or links
         attach_icon = " 📎" if task.attachments or task.links else ""
 
+        # Show progress bar for parent tasks
+        progress_str = ""
+        if task.is_parent_task():
+            completed, total = storage.get_task_progress(task.id)
+            if total > 0:
+                percentage = int((completed / total) * 100)
+                progress_bar = "█" * (percentage // 10) + "░" * (10 - percentage // 10)
+                progress_str = f"{progress_bar} {completed}/{total}"
+            else:
+                progress_str = "No subtasks"
+        elif task.is_subtask():
+            progress_str = "Subtask"
+        else:
+            progress_str = ""
+
         task_style = "dim strike" if task.completed else ""
         table.add_row(
             str(task.id),
             status,
             f"[{priority_color}]{task.priority}[/{priority_color}]",
             f"[{task_style}]{task.text}[/{task_style}]{attach_icon}" if task.completed else f"{task.text}{attach_icon}",
+            progress_str,
             tags_str,
             scope
         )
@@ -756,9 +773,218 @@ def interactive(show_all):
     app.run()
 
 
+
+@cli.command()
+@click.argument('task_id', type=int)
+@click.option('--notes', '-n', help='Add notes/checklist to the task')
+@click.option('--interactive', '-i', is_flag=True, help='Edit notes interactively')
+def notes(task_id, notes, interactive):
+    """Add or edit notes/checklist for a task"""
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Task {task_id} not found")
+        sys.exit(1)
+    
+    if interactive:
+        # Interactive mode - open editor
+        import tempfile
+        import subprocess
+        
+        # Create temp file with current notes
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(task.notes)
+            temp_file = f.name
+        
+        try:
+            # Try to open editor
+            editor = os.environ.get('EDITOR', 'notepad' if platform.system() == 'Windows' else 'nano')
+            subprocess.run([editor, temp_file], check=True)
+            
+            # Read updated notes
+            with open(temp_file, 'r') as f:
+                new_notes = f.read().strip()
+            
+            task.notes = new_notes
+            storage.update_task(task)
+            console.print(f"[green]✔[/green] Updated notes for task #{task_id}")
+            
+        except subprocess.CalledProcessError:
+            console.print(f"[red]✗[/red] Failed to open editor")
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(temp_file)
+            except:
+                pass
+    elif notes is not None:
+        # Direct notes input
+        task.notes = notes
+        storage.update_task(task)
+        console.print(f"[green]✔[/green] Updated notes for task #{task_id}")
+    else:
+        # Show current notes
+        if task.notes:
+            console.print(f"[cyan]Notes for task #{task_id}:[/cyan]")
+            console.print(task.notes)
+        else:
+            console.print(f"[dim]No notes for task #{task_id}[/dim]")
+
+@cli.command()
+@click.argument('task_id', type=int)
+def show(task_id):
+    """Show detailed information about a task including subtasks and notes"""
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Task {task_id} not found")
+        sys.exit(1)
+    
+    # Task details
+    status = "✔ Completed" if task.completed else "○ Active"
+    priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
+    
+    console.print(f"[bold cyan]Task #{task.id}[/bold cyan]")
+    console.print(f"Status: {status}")
+    console.print(f"Priority: [{priority_color}]{task.priority}[/{priority_color}]")
+    console.print(f"Text: {task.text}")
+    
+    if task.tags:
+        console.print(f"Tags: {', '.join(task.tags)}")
+    
+    if task.attachments or task.links:
+        console.print(f"Attachments: {len(task.attachments)} files, {len(task.links)} links")
+    
+    # Show progress if it's a parent task
+    if task.is_parent_task():
+        completed, total = storage.get_task_progress(task_id)
+        if total > 0:
+            percentage = int((completed / total) * 100)
+            progress_bar = "█" * (percentage // 10) + "░" * (10 - percentage // 10)
+            console.print(f"Progress: {progress_bar} {completed}/{total} subtasks")
+        else:
+            console.print("Progress: No subtasks")
+    
+    # Show subtasks
+    subtasks = storage.get_subtasks(task_id)
+    if subtasks:
+        console.print(f"\n[bold]Subtasks ({len(subtasks)}):[/bold]")
+        for subtask in subtasks:
+            subtask_status = "✔" if subtask.completed else "○"
+            subtask_color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[subtask.priority]
+            console.print(f"  {subtask_status} #{subtask.id} [{subtask_color}]{subtask.priority}[/{subtask_color}] {subtask.text}")
+    
+    # Show notes
+    if task.notes:
+        console.print(f"\n[bold]Notes:[/bold]")
+        console.print(task.notes)
+
 # Import and register context commands
 from tix.commands.context import context
 cli.add_command(context)
+
+# Subtask commands
+@cli.group()
+def subtask():
+    """Manage subtasks for breaking down complex tasks"""
+    pass
+
+@subtask.command('add')
+@click.argument('parent_id', type=int)
+@click.argument('subtask_text')
+@click.option('--priority', '-p', default='medium',
+              type=click.Choice(['low', 'medium', 'high']),
+              help='Set subtask priority')
+@click.option('--tag', '-t', multiple=True, help='Add tags to subtask')
+def add_subtask(parent_id, subtask_text, priority, tag):
+    """Add a subtask to a parent task"""
+    try:
+        subtask = storage.add_subtask(parent_id, subtask_text, priority, list(tag))
+        color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
+        console.print(f"[green]✔[/green] Added subtask #{subtask.id} to task #{parent_id}: [{color}]{subtask_text}[/{color}]")
+        if tag:
+            console.print(f"[dim]  Tags: {', '.join(tag)}[/dim]")
+    except ValueError as e:
+        console.print(f"[red]✗[/red] {e}")
+        sys.exit(1)
+
+@subtask.command('list')
+@click.argument('parent_id', type=int)
+def list_subtasks(parent_id):
+    """List all subtasks for a parent task"""
+    parent_task = storage.get_task(parent_id)
+    if not parent_task:
+        console.print(f"[red]✗[/red] Parent task {parent_id} not found")
+        sys.exit(1)
+    
+    subtasks = storage.get_subtasks(parent_id)
+    if not subtasks:
+        console.print(f"[dim]No subtasks found for task #{parent_id}[/dim]")
+        return
+    
+    table = Table(title=f"Subtasks for Task #{parent_id}: {parent_task.text}")
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("✔", style="green", no_wrap=True)
+    table.add_column("Priority", style="magenta")
+    table.add_column("Subtask", style="white")
+    table.add_column("Tags", style="dim")
+    
+    for task in subtasks:
+        status = "✔" if task.completed else "○"
+        color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[task.priority]
+        tags_str = ", ".join(task.tags) if task.tags else ""
+        
+        table.add_row(
+            str(task.id),
+            status,
+            f"[{color}]{task.priority}[/{color}]",
+            task.text,
+            tags_str
+        )
+    
+    console.print(table)
+
+@subtask.command('done')
+@click.argument('parent_id', type=int)
+@click.argument('subtask_id', type=int)
+def done_subtask(parent_id, subtask_id):
+    """Mark a subtask as done"""
+    subtask = storage.get_task(subtask_id)
+    if not subtask or subtask.parent_id != parent_id:
+        console.print(f"[red]✗[/red] Subtask {subtask_id} not found under parent task {parent_id}")
+        sys.exit(1)
+    
+    if subtask.completed:
+        console.print(f"[yellow]⚠[/yellow] Subtask #{subtask_id} is already completed")
+        return
+    
+    subtask.mark_done()
+    storage.update_task(subtask)
+    
+    # Update parent task progress
+    completed, total = storage.get_task_progress(parent_id)
+    console.print(f"[green]✔[/green] Completed subtask #{subtask_id}")
+    console.print(f"[dim]  Progress: {completed}/{total} subtasks completed[/dim]")
+
+@subtask.command('rm')
+@click.argument('parent_id', type=int)
+@click.argument('subtask_id', type=int)
+def rm_subtask(parent_id, subtask_id):
+    """Remove a subtask"""
+    subtask = storage.get_task(subtask_id)
+    if not subtask or subtask.parent_id != parent_id:
+        console.print(f"[red]✗[/red] Subtask {subtask_id} not found under parent task {parent_id}")
+        sys.exit(1)
+    
+    # Remove from parent's subtask list
+    parent_task = storage.get_task(parent_id)
+    if parent_task:
+        parent_task.remove_subtask(subtask_id)
+        storage.update_task(parent_task)
+    
+    # Delete the subtask
+    if storage.delete_task(subtask_id):
+        console.print(f"[green]✔[/green] Removed subtask #{subtask_id}")
+    else:
+        console.print(f"[red]✗[/red] Failed to remove subtask #{subtask_id}")
 
 
 if __name__ == '__main__':
