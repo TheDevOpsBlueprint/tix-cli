@@ -8,25 +8,56 @@ from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
-from tix.storage.context_storage import ContextStorage
+# from tix.storage.context_storage import ContextStorage
 from tix.storage.history import HistoryManager
 from tix.storage.backup import create_backup, list_backups, restore_from_backup
 from tix.models import Task
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from datetime import datetime
-from .storage import storage
-from .config import CONFIG
-from .context import context_storage
+# from .storage import storage
+# from .config import CONFIG
+# from .context import context_storage
 
 console = Console()
 storage = TaskStorage()
+
+def parse_time_estimate(time_str: str) -> int:
+    """Parse time string like '2h', '30m', '1h30m' into minutes"""
+    time_str = time_str.lower().strip()
+    total_minutes = 0
+    
+    if 'h' in time_str:
+        parts = time_str.split('h')
+        hours = int(parts[0])
+        total_minutes += hours * 60
+        if len(parts) > 1 and parts[1]:
+            mins = parts[1].replace('m', '').strip()
+            if mins:
+                total_minutes += int(mins)
+    elif 'm' in time_str:
+        total_minutes = int(time_str.replace('m', ''))
+    else:
+        total_minutes = int(time_str)
+    
+    return total_minutes
+
+
+def format_time_helper(minutes: int) -> str:
+    """Format minutes into human readable format"""
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    mins = minutes % 60
+    if mins == 0:
+        return f"{hours}h"
+    return f"{hours}h {mins}m"
 
 from typing import Optional, Dict, Any
 import json
 
 
-context_storage = ContextStorage()
+# context_storage = ContextStorage()
 history = HistoryManager()
 
 @click.group(invoke_without_command=True)
@@ -148,7 +179,8 @@ def restore(backup_file, data_file, yes):
 @click.option('--tag', '-t', multiple=True, help='Add tags to task')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-def add(task, priority, tag, attach, link):
+@click.option('--estimate', '-e', help='Time estimate (e.g., 2h, 30m, 1h30m)')
+def add(task, priority, tag, attach, link, estimate):
     """Add a new task"""
     from tix.config import CONFIG
 
@@ -156,13 +188,23 @@ def add(task, priority, tag, attach, link):
         console.print("[red]✗[/red] Task text cannot be empty")
         sys.exit(1)
 
-    # merge default tags from config
+    estimate_minutes = None
+    if estimate:
+        try:
+            estimate_minutes = parse_time_estimate(estimate)
+        except ValueError:
+            console.print("[red]✗[/red] Invalid time format. Use format like: 2h, 30m, 1h30m")
+            return
+
+    # Use config defaults if not specified
+    if priority is None:
+        priority = CONFIG.get('defaults', {}).get('priority', 'medium')
+    
+    # Merge config default tags with provided tags
     default_tags = CONFIG.get('defaults', {}).get('tags', [])
-    tags = list(default_tags) + list(tag)
-    tags = list(dict.fromkeys(tags))  # preserve order, unique
-
-    new_task = storage.add_task(task, priority, tags)
-
+    all_tags = list(set(list(tag) + default_tags))
+    
+    new_task = storage.add_task(task, priority, all_tags, estimate=estimate_minutes)
     # Handle attachments
     if attach:
         attachment_dir = Path.home() / ".tix" / "attachments" / str(new_task.id)
@@ -189,10 +231,16 @@ def add(task, priority, tag, attach, link):
 
     color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
     console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]")
-    if tags:
-        console.print(f"[dim]  Tags: {', '.join(tags)}[/dim]")
-    if attach or link:
-        console.print(f"[dim]  Attachments/Links added[/dim]")
+    
+    # Show notification if enabled
+    if CONFIG.get('notifications', {}).get('on_creation', True):
+        if all_tags:
+            tag_color = CONFIG.get('colors', {}).get('tags', 'cyan')
+            console.print(f"[dim]  Tags: [{tag_color}]{', '.join(all_tags)}[/{tag_color}][/dim]")
+        if attach or link:
+            console.print(f"[dim]  Attachments/Links added[/dim]")
+        if estimate:
+            console.print(f"[dim]  Estimated time: {new_task.format_time(estimate_minutes)}[/dim]")
 
 
 @cli.command()
@@ -1136,6 +1184,197 @@ def config_edit():
         console.print(f"[red]✗[/red] Failed to open editor: {e}")
         console.print(f"[dim]Try: export EDITOR=vim or export EDITOR=nano[/dim]")
 
+@cli.command()
+@click.argument('task_id', type=int)
+def start(task_id):
+    """Start time tracking for a task"""
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Task #{task_id} not found")
+        return
+    
+    if task.completed:
+        console.print(f"[yellow]![/yellow] Cannot start timer on completed task")
+        return
+    
+    for t in storage.load_tasks():
+        if t.is_timer_running() and t.id != task_id:
+            console.print(f"[yellow]![/yellow] Task #{t.id} timer is already running")
+            console.print(f"[dim]Stop it first with: tix stop {t.id}[/dim]")
+            return
+    
+    if task.is_timer_running():
+        duration = task.get_current_session_duration()
+        console.print(f"[yellow]![/yellow] Timer already running for {task.format_time(duration)}")
+        return
+    
+    try:
+        task.start_timer()
+        storage.update_task(task)
+        console.print(f"[green]⏱[/green] Started timer for task #{task_id}: {task.text}")
+        if task.estimate:
+            console.print(f"[dim]  Estimated: {task.format_time(task.estimate)}[/dim]")
+    except ValueError as e:
+        console.print(f"[red]✗[/red] {str(e)}")
+
+
+@cli.command()
+@click.argument('task_id', type=int)
+def stop(task_id):
+    """Stop time tracking for a task"""
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]✗[/red] Task #{task_id} not found")
+        return
+    
+    if not task.is_timer_running():
+        console.print(f"[yellow]![/yellow] No timer running for task #{task_id}")
+        return
+    
+    try:
+        duration = task.stop_timer()
+        storage.update_task(task)
+        
+        console.print(f"[green]⏹[/green] Stopped timer for task #{task_id}")
+        console.print(f"[cyan]  Session duration: {task.format_time(duration)}[/cyan]")
+        console.print(f"[dim]  Total time spent: {task.format_time(task.time_spent)}[/dim]")
+        
+        if task.estimate:
+            remaining = task.get_time_remaining()
+            if remaining > 0:
+                console.print(f"[dim]  Remaining: {task.format_time(remaining)}[/dim]")
+            elif remaining < 0:
+                console.print(f"[yellow]  Over estimate by: {task.format_time(abs(remaining))}[/yellow]")
+            else:
+                console.print("[green]  Completed within estimate![/green]")
+    except ValueError as e:
+        console.print(f"[red]✗[/red] {str(e)}")
+
+
+@cli.command()
+@click.argument('task_id', type=int, required=False)
+def status(task_id):
+    """Show timer status for a task or all tasks"""
+    if task_id:
+        task = storage.get_task(task_id)
+        if not task:
+            console.print(f"[red]✗[/red] Task #{task_id} not found")
+            return
+        
+        if task.is_timer_running():
+            duration = task.get_current_session_duration()
+            console.print(f"[green]⏱[/green] Timer running for task #{task_id}: {task.text}")
+            console.print(f"[cyan]  Current session: {task.format_time(duration)}[/cyan]")
+            console.print(f"[dim]  Total time: {task.format_time(task.time_spent + duration)}[/dim]")
+        else:
+            console.print(f"[dim]No timer running for task #{task_id}[/dim]")
+            if task.time_spent > 0:
+                console.print(f"[dim]Total time spent: {task.format_time(task.time_spent)}[/dim]")
+    else:
+        tasks = storage.load_tasks()
+        running_tasks = [t for t in tasks if t.is_timer_running()]
+        
+        if running_tasks:
+            for task in running_tasks:
+                duration = task.get_current_session_duration()
+                console.print(f"[green]⏱[/green] Task #{task.id}: {task.text}")
+                console.print(f"[cyan]  Running for: {task.format_time(duration)}[/cyan]")
+        else:
+            console.print("[dim]No active timers[/dim]")
+
+
+@cli.command()
+@click.option('--period', '-p', type=click.Choice(['week', 'month', 'all']), 
+              default='week', help='Time period for report')
+def timereport(period):
+    """Generate time tracking report"""
+    from datetime import timedelta
+    
+    tasks = storage.load_tasks()
+    now = datetime.now()
+    
+    if period == 'week':
+        start_date = now - timedelta(days=7)
+        title = "Weekly Time Report"
+    elif period == 'month':
+        start_date = now - timedelta(days=30)
+        title = "Monthly Time Report"
+    else:
+        start_date = None
+        title = "All Time Report"
+    
+    relevant_tasks = []
+    for task in tasks:
+        if task.time_spent > 0:
+            if start_date:
+                task_logs = [log for log in task.time_logs 
+                           if datetime.fromisoformat(log['ended_at']) >= start_date]
+                if task_logs:
+                    relevant_tasks.append((task, sum(log['duration'] for log in task_logs)))
+            else:
+                relevant_tasks.append((task, task.time_spent))
+    
+    if not relevant_tasks:
+        console.print(f"[dim]No time tracked in the {period}[/dim]")
+        return
+    
+    console.print(f"\n[bold cyan]{title}[/bold cyan]\n")
+    
+    table = Table()
+    table.add_column("ID", style="cyan", width=4)
+    table.add_column("Task")
+    table.add_column("Estimated", style="dim", width=10)
+    table.add_column("Spent", style="yellow", width=10)
+    table.add_column("Remaining", width=10)
+    table.add_column("Status", width=8)
+    
+    total_estimated = 0
+    total_spent = 0
+    
+    for task, time_in_period in relevant_tasks:
+        estimate_str = task.format_time(task.estimate) if task.estimate else "-"
+        spent_str = task.format_time(time_in_period)
+        
+        if task.estimate:
+            total_estimated += task.estimate
+            remaining = task.get_time_remaining()
+            if remaining > 0:
+                remaining_str = task.format_time(remaining)
+                status = "✓" if task.completed else "→"
+                status_color = "green" if task.completed else "blue"
+            elif remaining < 0:
+                remaining_str = f"+{task.format_time(abs(remaining))}"
+                status = "⚠"
+                status_color = "yellow"
+            else:
+                remaining_str = "0m"
+                status = "✓"
+                status_color = "green"
+        else:
+            remaining_str = "-"
+            status = "✓" if task.completed else "→"
+            status_color = "green" if task.completed else "blue"
+        
+        total_spent += time_in_period
+        
+        table.add_row(
+            str(task.id),
+            task.text[:40] + "..." if len(task.text) > 40 else task.text,
+            estimate_str,
+            spent_str,
+            remaining_str,
+            f"[{status_color}]{status}[/{status_color}]"
+        )
+    
+    console.print(table)
+    
+    console.print(f"\n[bold]Summary:[/bold]")
+    if total_estimated > 0:
+        console.print(f"  Total estimated: {format_time_helper(total_estimated)}")
+    console.print(f"  Total spent: {format_time_helper(total_spent)}")
+    if total_estimated > 0:
+        efficiency = (total_estimated / max(total_spent, 1)) * 100
+        console.print(f"  Efficiency: {efficiency:.1f}%")
 
 if __name__ == '__main__':
     cli()

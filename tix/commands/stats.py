@@ -9,7 +9,7 @@ console = Console()
 
 
 def show_stats(storage):
-    """Display comprehensive task statistics"""
+    """Display comprehensive task statistics including time tracking"""
     tasks = storage.load_tasks()
 
     if not tasks:
@@ -27,6 +27,14 @@ def show_stats(storage):
     for task in tasks:
         all_tags.extend(task.tags)
     tag_counts = Counter(all_tags)
+
+    # Time tracking stats
+    tasks_with_estimates = [t for t in tasks if t.estimate]
+    tasks_with_time = [t for t in tasks if t.time_spent > 0]
+    total_estimated = sum(t.estimate for t in tasks_with_estimates)
+    total_spent = sum(t.time_spent for t in tasks_with_time)
+    
+    running_timers = [t for t in tasks if t.is_timer_running()]
 
     # Time analysis
     today = datetime.now().date()
@@ -48,6 +56,19 @@ def show_stats(storage):
   • 🔴 High: {priority_counts.get('high', 0)}
   • 🟡 Medium: {priority_counts.get('medium', 0)}
   • 🟢 Low: {priority_counts.get('low', 0)}
+
+[bold]Time Tracking:[/bold]
+  • Tasks with estimates: {len(tasks_with_estimates)}
+  • Tasks with tracked time: {len(tasks_with_time)}"""
+
+    if total_estimated > 0:
+        stats_text += f"\n  • Total estimated: {format_time(total_estimated)}"
+    if total_spent > 0:
+        stats_text += f"\n  • Total time spent: {format_time(total_spent)}"
+    if running_timers:
+        stats_text += f"\n  • [green]Active timers: {len(running_timers)}[/green]"
+
+    stats_text += f"""
 
 [bold]Today's Progress:[/bold]
   • Completed today: {today_completed} task(s)
@@ -76,3 +97,21 @@ def show_stats(storage):
                 total=len(tasks),
                 completed=len(completed)
             )
+    
+    # Show active timers
+    if running_timers:
+        console.print("\n[bold]Active Timers:[/bold]")
+        for task in running_timers:
+            duration = task.get_current_session_duration()
+            console.print(f"  • Task #{task.id}: {task.text} - [cyan]{format_time(duration)}[/cyan]")
+
+
+def format_time(minutes: int) -> str:
+    """Format minutes into human readable format"""
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    mins = minutes % 60
+    if mins == 0:
+        return f"{hours}h"
+    return f"{hours}h {mins}m"
