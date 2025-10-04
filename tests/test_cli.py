@@ -1,3 +1,4 @@
+from platform import platform
 import pytest
 from click.testing import CliRunner
 from tix.cli import cli
@@ -17,6 +18,7 @@ def test_cli_version(runner):
     result = runner.invoke(cli, ['--version'])
     assert result.exit_code == 0
     assert 'version 0.8.0' in result.output  # Fixed: Changed from 0.1.0 to 0.8.0
+    assert '(Python ' + platform.python_version() + ')' in result.output
 
 
 def test_add_task(runner):

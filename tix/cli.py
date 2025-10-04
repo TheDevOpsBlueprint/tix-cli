@@ -30,7 +30,7 @@ context_storage = ContextStorage()
 history = HistoryManager()
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="0.8.0", prog_name="tix")
+@click.version_option(version="0.8.0", prog_name="tix", message='%(prog)s, version %(version)s (Python ' + platform.python_version() + ')')
 @click.pass_context
 def cli(ctx):
     """⚡ TIX - Lightning-fast terminal task manager
