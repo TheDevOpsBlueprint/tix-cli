@@ -16,6 +16,7 @@ curl -sSL https://raw.githubusercontent.com/TheDevOpsBlueprint/tix-cli/main/inst
 ```
 
 **That's it!** This smart installer (v8.0) will:
+
 - ✅ Detect your OS and shell automatically
 - ✅ Handle Python 3.12+ managed environments (PEP 668)
 - ✅ Install using pipx for isolation (recommended)
@@ -24,6 +25,7 @@ curl -sSL https://raw.githubusercontent.com/TheDevOpsBlueprint/tix-cli/main/inst
 - ✅ Offer to restart your shell with everything ready
 
 After installation, you can immediately use:
+
 ```bash
 tix <TAB><TAB>  # Tab completion works!
 tix add "My task"  # Start managing tasks!
@@ -128,22 +130,26 @@ pip install -e .
 ### Python "Externally Managed Environment" Error
 
 If you see this error on Python 3.12+:
+
 ```
 error: externally-managed-environment
 ```
 
 **Solution 1: Use the smart installer (recommended)**
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/TheDevOpsBlueprint/tix-cli/main/install.sh | bash
 ```
 
 **Solution 2: Use pipx**
+
 ```bash
 brew install pipx  # on macOS
 pipx install tix-cli
 ```
 
 **Solution 3: Use virtual environment**
+
 ```bash
 python3 -m venv tix-env
 source tix-env/bin/activate
@@ -268,12 +274,16 @@ tix search "bug"
 tix search "api" -p high -t backend
 
 # Filter by criteria
-tix filter -p high           # High priority tasks
-tix filter -t urgent         # Tasks tagged "urgent"
-tix filter --active          # Only active tasks
-tix filter -a                # Short form for active
-tix filter --completed       # Only completed tasks
-tix filter -c                # Short form for completed
+
+--- README.md
+@@ -449 +449
+| `filter` | Filter by criteria | `tix filter apply -p high` |
+
+@@ -577 +577
+  f: filter      # tix f apply -p high → tix filter apply -p high
+
+@@ -756 +756
+ tix filter apply -t project-x
 
 # List all tags
 tix tags
@@ -311,7 +321,8 @@ tix report --output my-tasks.txt
 ```
 
 ### 🔒 Backup & Restore
-*All destructive operations (rm, clear) automatically create a backup before execution*
+
+_All destructive operations (rm, clear) automatically create a backup before execution_
 
 #### Creating Backups
 
@@ -343,7 +354,6 @@ tix restore <file_name> -y
 tix backup restore <file_name>
 ```
 
-
 # 📖 Filters
 
 #### Saved Filters (Saved Searches)
@@ -359,7 +369,7 @@ tix filter save done-only --completed
 
 # Overwrite an existing filter (with --force)
 tix filter save work -t work -p medium --force
-````
+```
 
 #### Listing Saved Filters
 
@@ -415,6 +425,7 @@ tix add --priority <TAB><TAB>
 Tasks are stored in `~/.tix/tasks.json` in your home directory.
 
 Example structure:
+
 ```json
 {
   "next_id": 4,
@@ -434,26 +445,26 @@ Example structure:
 
 ## 🎨 Command Reference
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `add` | Add a new task | `tix add "Task" -p high -t work -f file.txt -l https://example.com` |
-| `ls` | List tasks | `tix ls --all` |
-| `done` | Complete a task | `tix done 1` |
-| `done-all` | Complete multiple tasks | `tix done-all 1 2 3` |
-| `rm` | Remove a task | `tix rm 1 -y` |
-| `clear` | Clear tasks in bulk | `tix clear --completed` |
-| `edit` | Edit task properties | `tix edit 1 --text "New" -f notes.md -l https://example.com` |
-| `priority` | Change task priority | `tix priority 1 high` |
-| `move` | Change task ID | `tix move 1 10` |
-| `undo` | Reactivate completed task | `tix undo 1` |
-| `search` | Search tasks by text | `tix search "bug"` |
-| `filter` | Filter by criteria | `tix filter -p high` |
-| `tags` | List all tags | `tix tags` |
-| `stats` | Show statistics | `tix stats -d` |
-| `report` | Generate report | `tix report -f json -o tasks.json` |
-| `open` | Open attachments and links for a task | `tix open 1` |
-| `config` | Manage configuration | `tix config show`, `tix config set defaults.priority high` |
-| `interactive` | Launch interactive TUI | `tix interactive` |
+| Command       | Description                           | Example                                                             |
+| ------------- | ------------------------------------- | ------------------------------------------------------------------- |
+| `add`         | Add a new task                        | `tix add "Task" -p high -t work -f file.txt -l https://example.com` |
+| `ls`          | List tasks                            | `tix ls --all`                                                      |
+| `done`        | Complete a task                       | `tix done 1`                                                        |
+| `done-all`    | Complete multiple tasks               | `tix done-all 1 2 3`                                                |
+| `rm`          | Remove a task                         | `tix rm 1 -y`                                                       |
+| `clear`       | Clear tasks in bulk                   | `tix clear --completed`                                             |
+| `edit`        | Edit task properties                  | `tix edit 1 --text "New" -f notes.md -l https://example.com`        |
+| `priority`    | Change task priority                  | `tix priority 1 high`                                               |
+| `move`        | Change task ID                        | `tix move 1 10`                                                     |
+| `undo`        | Reactivate completed task             | `tix undo 1`                                                        |
+| `search`      | Search tasks by text                  | `tix search "bug"`                                                  |
+| `filter`      | Filter by criteria                    | `tix filter -p high`                                                |
+| `tags`        | List all tags                         | `tix tags`                                                          |
+| `stats`       | Show statistics                       | `tix stats -d`                                                      |
+| `report`      | Generate report                       | `tix report -f json -o tasks.json`                                  |
+| `open`        | Open attachments and links for a task | `tix open 1`                                                        |
+| `config`      | Manage configuration                  | `tix config show`, `tix config set defaults.priority high`          |
+| `interactive` | Launch interactive TUI                | `tix interactive`                                                   |
 
 ## 🗑️ Uninstalling TIX
 
@@ -469,12 +480,14 @@ make uninstall
 ```
 
 #### If installed with pipx:
+
 ```bash
 pipx uninstall tix-cli
 rm -rf ~/.tix  # Remove task data (optional)
 ```
 
 #### If installed with pip:
+
 ```bash
 pip uninstall tix-cli -y
 # or
@@ -483,6 +496,7 @@ rm -rf ~/.tix  # Remove task data (optional)
 ```
 
 #### If installed in virtual environment:
+
 ```bash
 # Deactivate and remove the virtual environment
 deactivate
@@ -491,6 +505,7 @@ rm -rf ~/.tix  # Remove task data (optional)
 ```
 
 #### Clean up shell configuration (optional):
+
 ```bash
 # Remove TIX completion from your shell config
 # For bash: edit ~/.bashrc or ~/.bash_profile
@@ -504,6 +519,7 @@ rm -rf ~/.tix  # Remove task data (optional)
 ```
 
 #### Backup your tasks before uninstalling:
+
 ```bash
 # Save your tasks before removing TIX
 tix report -f json -o my-tasks-backup.json
@@ -533,11 +549,12 @@ Set default values for new tasks:
 
 ```yaml
 defaults:
-  priority: medium  # Default priority: low, medium, high
-  tags: []          # Default tags to add to every task
+  priority: medium # Default priority: low, medium, high
+  tags: [] # Default tags to add to every task
 ```
 
 Example with default tags:
+
 ```yaml
 defaults:
   priority: high
@@ -568,14 +585,14 @@ Create shortcuts for commands:
 
 ```yaml
 aliases:
-  l: ls          # tix l → tix ls
-  a: add         # tix a "task" → tix add "task"
-  d: done        # tix d 1 → tix done 1
-  r: rm          # tix r 1 → tix rm 1
-  e: edit        # tix e 1 → tix edit 1
-  p: priority    # tix p 1 high → tix priority 1 high
-  s: search      # tix s "query" → tix search "query"
-  f: filter      # tix f -p high → tix filter -p high
+  l: ls # tix l → tix ls
+  a: add # tix a "task" → tix add "task"
+  d: done # tix d 1 → tix done 1
+  r: rm # tix r 1 → tix rm 1
+  e: edit # tix e 1 → tix edit 1
+  p: priority # tix p 1 high → tix priority 1 high
+  s: search # tix s "query" → tix search "query"
+  f: filter # tix f -p high → tix filter -p high
 ```
 
 #### Notifications
@@ -584,10 +601,10 @@ Control notification verbosity:
 
 ```yaml
 notifications:
-  enabled: true          # Master switch
-  on_creation: true      # Show when creating tasks
-  on_update: true        # Show detailed updates
-  on_completion: true    # Show when completing tasks
+  enabled: true # Master switch
+  on_creation: true # Show when creating tasks
+  on_update: true # Show detailed updates
+  on_completion: true # Show when completing tasks
 ```
 
 #### Display
@@ -596,10 +613,10 @@ Customize task list appearance:
 
 ```yaml
 display:
-  show_ids: true         # Show task IDs
-  show_dates: false      # Show creation dates
-  compact_mode: false    # Compact view (hide tags column)
-  max_text_length: 0     # Truncate text (0 = no limit)
+  show_ids: true # Show task IDs
+  show_dates: false # Show creation dates
+  compact_mode: false # Compact view (hide tags column)
+  max_text_length: 0 # Truncate text (0 = no limit)
 ```
 
 ### Configuration Commands
@@ -713,6 +730,7 @@ tix-cli/
 ### CI/CD Pipeline
 
 The project includes GitHub Actions workflows for:
+
 - Testing across Python 3.8-3.12
 - Code quality checks (flake8, black, isort)
 - Building distribution packages
@@ -765,10 +783,12 @@ tix search "API" -t project-x
 ### Installation Issues
 
 **Issue: "externally-managed-environment" error**
+
 - Use the smart installer: `curl -sSL .../install.sh | bash`
 - Or use pipx: `pipx install tix-cli`
 
 **Issue: `tix: command not found`**
+
 ```bash
 # Add to PATH
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
@@ -776,6 +796,7 @@ source ~/.bashrc
 ```
 
 **Issue: Permission denied**
+
 ```bash
 # Use user installation
 pip install --user tix-cli
@@ -784,6 +805,7 @@ pip install --user tix-cli
 ### Shell Completion Issues
 
 **Issue: Tab completion not working**
+
 ```bash
 # For bash, check if completion is loaded
 grep "_tix_simple" ~/.bashrc
@@ -798,6 +820,7 @@ source ~/.bashrc
 ### Data Issues
 
 **Issue: Tasks not persisting**
+
 ```bash
 # Check storage file exists
 ls -la ~/.tix/tasks.json
@@ -824,6 +847,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 🙏 Acknowledgments
 
 Built with:
+
 - [Click](https://click.palletsprojects.com/) - CLI framework with native completion support
 - [Rich](https://rich.readthedocs.io/) - Terminal formatting
 - [Python](https://python.org/) - Programming language
@@ -844,4 +868,4 @@ If you find TIX useful, please consider giving it a star on GitHub!
 
 **Made with ❤️ by TheDevOpsBlueprint**
 
-*Enjoy lightning-fast task management with TIX!*
+_Enjoy lightning-fast task management with TIX!_

@@ -132,58 +132,81 @@ def test_done_command(runner):
             assert 'Completed' in result.output
 
 
-def test_filter_command(runner):
-    """Test filtering tasks with different options including short flags"""
+def test_filter_apply_command(runner):
+    """Tests the 'filter apply' subcommand with various flags."""
     with runner.isolated_filesystem():
-        temp_storage = Path.cwd() / "tasks.json"
-        # Pre-populate with tasks: one completed task with high priority and work tag,
-        # one active task with medium priority and urgent tag
-        temp_storage.write_text(
-            '[{"id": 1, "text": "Completed task", "priority": "high", "completed": true, '
-            '"created_at": "2025-01-01T00:00:00", "completed_at": "2025-01-02T00:00:00", "tags": ["work"]}, '
-            '{"id": 2, "text": "Active task", "priority": "medium", "completed": false, '
-            '"created_at": "2025-01-01T00:00:00", "completed_at": null, "tags": ["urgent"]}]')
+        temp_storage_path = Path.cwd() / "tasks.json"
+        temp_storage_path.write_text(
+            '[{"id": 1, "text": "Completed task", "priority": "high", "completed": true, "tags": ["work"]},'
+            ' {"id": 2, "text": "Active task", "priority": "medium", "completed": false, "tags": ["urgent"]}]'
+        )
 
         from tix.storage.json_storage import TaskStorage
-        test_storage = TaskStorage(temp_storage)
+        test_storage = TaskStorage(temp_storage_path)
 
         with patch('tix.cli.storage', test_storage):
             # Test filter by priority
-            result = runner.invoke(cli, ['filter', '-p', 'high'])
+            result = runner.invoke(cli, ['filter', 'apply', '-p', 'high'])
             assert result.exit_code == 0
             assert 'Completed task' in result.output
             assert 'Active task' not in result.output
 
             # Test filter by tag
-            result = runner.invoke(cli, ['filter', '-t', 'urgent'])
+            result = runner.invoke(cli, ['filter', 'apply', '-t', 'urgent'])
             assert result.exit_code == 0
             assert 'Active task' in result.output
             assert 'Completed task' not in result.output
 
-            # Test filter by completed status using long option
-            result = runner.invoke(cli, ['filter', '--completed'])
+            # Test filter by active status using short option
+            result = runner.invoke(cli, ['filter', 'apply', '-a'])
+            assert result.exit_code == 0
+            assert 'Active task' in result.output
+            assert 'Completed task' not in result.output
+
+            # Test filter by completed status using short option
+            result = runner.invoke(cli, ['filter', 'apply', '-c'])
             assert result.exit_code == 0
             assert 'Completed task' in result.output
             assert 'Active task' not in result.output
 
-            # Test filter by active status using long option
-            result = runner.invoke(cli, ['filter', '--active'])
-            assert result.exit_code == 0
-            assert 'Active task' in result.output
-            assert 'Completed task' not in result.output
+def test_filter_save_and_list_commands(runner):
+    """Tests the 'filter save' and 'filter list' subcommands."""
+    with runner.isolated_filesystem():
+        temp_filters_path = Path.cwd() / "filters.json"
+        with patch('tix.cli.FILTERS_PATH', temp_filters_path):
+            result_save = runner.invoke(
+                cli, ['filter', 'save', 'critical-work', '-p', 'high', '-t', 'work', '--active']
+            )
+            assert result_save.exit_code == 0
+            assert "Saved filter 'critical-work'" in result_save.output
 
-            # Test filter by completed status using new short option
-            result = runner.invoke(cli, ['filter', '-c'])
-            assert result.exit_code == 0
-            assert 'Completed task' in result.output
-            assert 'Active task' not in result.output
+            result_list = runner.invoke(cli, ['filter', 'list'])
+            assert result_list.exit_code == 0
+            assert 'critical-work' in result_list.output
+            assert 'priority=high' in result_list.output
+            assert "tag='work'" in result_list.output
+            assert 'active' in result_list.output
 
-            # Test filter by active status using new short option
-            result = runner.invoke(cli, ['filter', '-a'])
-            assert result.exit_code == 0
-            assert 'Active task' in result.output
-            assert 'Completed task' not in result.output
-            
+def test_filter_apply_saved_command(runner):
+    """Tests applying a pre-saved filter using 'filter apply --saved <name>'."""
+    with runner.isolated_filesystem():
+        temp_storage_path = Path.cwd() / "tasks.json"
+        temp_filters_path = Path.cwd() / "filters.json"
+        temp_storage_path.write_text(
+            '[{"id": 1, "text": "Urgent backend bug", "priority": "high", "completed": false, "tags": ["backend"]},'
+            ' {"id": 2, "text": "Low-priority docs update", "priority": "low", "completed": false, "tags": ["docs"]}]'
+        )
+
+        from tix.storage.json_storage import TaskStorage
+        test_storage = TaskStorage(temp_storage_path)
+
+        with patch('tix.cli.storage', test_storage), patch('tix.cli.FILTERS_PATH', temp_filters_path):
+            runner.invoke(cli, ['filter', 'save', 'backend-bugs', '-t', 'backend'])
+
+            result_apply = runner.invoke(cli, ['filter', 'apply', '--saved', 'backend-bugs'])
+            assert result_apply.exit_code == 0
+            assert 'Urgent backend bug' in result_apply.output
+            assert 'Low-priority docs update' not in result_apply.output
 
 def test_add_task_with_attachments_and_links(runner, tmp_path):
     """Test adding a task with file attachments and URLs"""
