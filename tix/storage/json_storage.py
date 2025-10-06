@@ -65,11 +65,11 @@ class TaskStorage:
         data["tasks"] = [task.to_dict() for task in tasks]
         self._write_data(data)
 
-    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None) -> Task:
+    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None, repeat: str = None) -> Task:
         """Add a new task and return it"""
         data = self._read_data()
         new_id = data["next_id"]
-        new_task = Task(id=new_id, text=text, priority=priority, tags=tags or [])
+        new_task = Task(id=new_id, text=text, priority=priority, tags=tags or [], repeats=repeat)
         data["tasks"].append(new_task.to_dict())
         data["next_id"] = new_id + 1
         self._write_data(data)
@@ -109,7 +109,7 @@ class TaskStorage:
     def get_completed_tasks(self) -> List[Task]:
         """Get all completed tasks"""
         return [t for t in self.load_tasks() if t.completed]
-    
+
     def get_attachment_dir(self, task_id: int) -> Path:
         """Return the path where attachments for a task should be stored"""
         return Path.home() / ".tix" / "attachments" / str(task_id)

@@ -13,7 +13,8 @@ class Task:
     completed_at: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     attachments: List[str] = field(default_factory=list)
-    links: List[str] = field(default_factory=list)  
+    links: List[str] = field(default_factory=list)
+    repeats: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert task to dictionary for JSON serialization"""
@@ -27,6 +28,7 @@ class Task:
             'tags': self.tags,
             'attachments': self.attachments,
             'links': self.links,
+            'repeats': self.repeats
         }
 
     @classmethod
@@ -40,8 +42,9 @@ class Task:
             created_at=data.get('created_at', datetime.now().isoformat()),
             completed_at=data.get('completed_at'),
             tags=data.get('tags', []),
-            attachments=data.get('attachments', []),  
-            links=data.get('links', [])               
+            attachments=data.get('attachments', []),
+            links=data.get('links', []),
+            repeats=data.get('repeats')
         )
 
     def mark_done(self):

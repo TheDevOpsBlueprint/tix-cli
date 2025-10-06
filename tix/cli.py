@@ -3,7 +3,8 @@ from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
-from datetime import datetime
+from datetime import datetime, timedelta, date
+from dateutil.relativedelta import relativedelta
 import subprocess
 import platform
 import os
@@ -40,7 +41,11 @@ def cli(ctx):
 @click.option('--tag', '-t', multiple=True, help='Add tags to task')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-def add(task, priority, tag, attach, link):
+@click.option('--repeat', '-r',
+              type=click.Choice(['daily', 'weekly', 'monthly']),
+              help='Set task repeatability')
+
+def add(task, priority, tag, attach, link, repeat):
     """Add a new task"""
     if not task or not task.strip():
         console.print("[red]✗[/red] Task text cannot be empty")
@@ -53,7 +58,7 @@ def add(task, priority, tag, attach, link):
         attachment_dir.mkdir(parents=True, exist_ok=True)
         for file_path in attach:
             try:
-                src = Path(file_path).expanduser().resolve()  
+                src = Path(file_path).expanduser().resolve()
                 if not src.exists():
                     console.print(f"[red]✗[/red] File not found: {file_path}")
                     continue
@@ -66,6 +71,10 @@ def add(task, priority, tag, attach, link):
     # Handle links
     if link:
         new_task.links.extend(link)
+
+    # Handles repetition
+    if repeat:
+        new_task.repeats = repeat
 
     storage.update_task(new_task)
 
@@ -93,12 +102,14 @@ def ls(all):
     table.add_column("Priority", width=8)
     table.add_column("Task")
     table.add_column("Tags", style="dim")
+    table.add_column("Repeat", width=8)
     count = dict()
 
     for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
         status = "✔" if task.completed else "○"
         priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
         tags_str = ", ".join(task.tags) if task.tags else ""
+        repeat_str = task.repeats
 
         # Show paperclip if task has attachments or links
         attach_icon = " 📎" if task.attachments or task.links else ""
@@ -109,7 +120,9 @@ def ls(all):
             status,
             f"[{priority_color}]{task.priority}[/{priority_color}]",
             f"[{task_style}]{task.text}[/{task_style}]{attach_icon}" if task.completed else f"{task.text}{attach_icon}",
-            tags_str
+            tags_str,
+            repeat_str
+
         )
         count[task.completed] = count.get(task.completed, 0) + 1
 
@@ -144,6 +157,22 @@ def done(task_id):
     task.mark_done()
     storage.update_task(task)
     console.print(f"[green]✔[/green] Completed: {task.text}")
+
+    if task.repeats and task.completed:
+        completed_date = date.fromisoformat(task.completed_at.split('T')[0])
+        next_task_date = None
+
+        if task.repeats == "daily":
+            next_task_date = completed_date + timedelta(days=1)
+        elif task.repeats == "weekly":
+            next_task_date = completed_date + timedelta(weeks=1)
+        elif task.repeats == "monthly":
+            next_task_date = completed_date + relativedelta(months=1)
+
+        console.print(f"[bold green]➜[/bold green] New '{task.repeats}' task created for {next_task_date.isoformat()}")
+
+        if date.today() == next_task_date:
+            new_task = storage.add_task(task.text, task.priority, task.tags)
 
 
 @cli.command()
@@ -261,7 +290,8 @@ def done_all(task_ids):
 @click.option('--remove-tag', multiple=True, help='Remove tags')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
+@click.option('--repeat', '-r', type=click.Choice(['daily', 'weekly', 'monthly']), help='New repeatability')
+def edit(task_id, text, priority, add_tag, remove_tag, attach, link, repeat):
     """Edit a task"""
     task = storage.get_task(task_id)
     if not task:
@@ -305,6 +335,12 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
     if link:
         task.links.extend(link)
         changes.append(f"links added: {list(link)}")
+
+    # Handle repeatability
+    if repeat:
+        old_repeat = task.repeats
+        task.repeats = repeat
+        changes.append(f"repeat: {old_repeat} → {repeat}")
 
     if changes:
         storage.update_task(task)
@@ -625,7 +661,7 @@ def open(task_id):
     if not task.attachments and not task.links:
         console.print(f"[yellow]![/yellow] Task {task_id} has no attachments or links")
         return
-    
+
     # Helper to open files cross-platform
     def safe_open(path_or_url, is_link=False):
         """Cross-platform safe opener for files and links (non-blocking)."""
@@ -659,11 +695,11 @@ def open(task_id):
         if not path.exists():
             console.print(f"[red]✗[/red] File not found: {file_path}")
             continue
-        safe_open(path)   
+        safe_open(path)
 
     # Open links
     for url in task.links:
-        safe_open(url, is_link=True)  
+        safe_open(url, is_link=True)
 
 @cli.command()
 @click.option('--all', '-a', 'show_all', is_flag=True, help='Show completed tasks too')
