@@ -53,3 +53,26 @@ class Task:
         """Add a tag to the task"""
         if tag not in self.tags:
             self.tags.append(tag)
+    
+
+@dataclass
+class Context:
+    """Context model for managing separate workspaces"""
+    name: str
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    description: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """Convert context to dictionary for JSON serialization"""
+        return {
+            'name': self.name,
+            'created_at': self.created_at,
+            'description': self.description
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        """Create context from dictionary"""
+        return cls(**data)
+    
+    

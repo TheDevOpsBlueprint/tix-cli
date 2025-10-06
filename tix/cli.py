@@ -15,9 +15,9 @@ from tix.models import Task
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from datetime import datetime
-from .storage import storage
+# from .storage import storage
 from .config import CONFIG
-from .context import context_storage
+from .storage import context_storage
 
 console = Console()
 storage = TaskStorage()
