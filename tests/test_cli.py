@@ -1,3 +1,4 @@
+from platform import platform
 import pytest
 from click.testing import CliRunner
 from tix.cli import cli
@@ -17,6 +18,7 @@ def test_cli_version(runner):
     result = runner.invoke(cli, ['--version'])
     assert result.exit_code == 0
     assert 'version 0.8.0' in result.output  # Fixed: Changed from 0.1.0 to 0.8.0
+    assert '(Python ' + platform.python_version() + ')' in result.output
 
 
 def test_add_task(runner):
@@ -149,37 +151,37 @@ def test_filter_command(runner):
 
         with patch('tix.cli.storage', test_storage):
             # Test filter by priority
-            result = runner.invoke(cli, ['filter', '-p', 'high'])
+            result = runner.invoke(cli, ['filter', 'apply', '-p', 'high'])
             assert result.exit_code == 0
             assert 'Completed task' in result.output
             assert 'Active task' not in result.output
 
             # Test filter by tag
-            result = runner.invoke(cli, ['filter', '-t', 'urgent'])
+            result = runner.invoke(cli, ['filter', 'apply', '-t', 'urgent'])
             assert result.exit_code == 0
             assert 'Active task' in result.output
             assert 'Completed task' not in result.output
 
             # Test filter by completed status using long option
-            result = runner.invoke(cli, ['filter', '--completed'])
+            result = runner.invoke(cli, ['filter', 'apply', '--completed'])
             assert result.exit_code == 0
             assert 'Completed task' in result.output
             assert 'Active task' not in result.output
 
             # Test filter by active status using long option
-            result = runner.invoke(cli, ['filter', '--active'])
+            result = runner.invoke(cli, ['filter', 'apply', '--active'])
             assert result.exit_code == 0
             assert 'Active task' in result.output
             assert 'Completed task' not in result.output
 
             # Test filter by completed status using new short option
-            result = runner.invoke(cli, ['filter', '-c'])
+            result = runner.invoke(cli, ['filter', 'apply', '-c'])
             assert result.exit_code == 0
             assert 'Completed task' in result.output
             assert 'Active task' not in result.output
 
             # Test filter by active status using new short option
-            result = runner.invoke(cli, ['filter', '-a'])
+            result = runner.invoke(cli, ['filter', 'apply', '-a'])
             assert result.exit_code == 0
             assert 'Active task' in result.output
             assert 'Completed task' not in result.output

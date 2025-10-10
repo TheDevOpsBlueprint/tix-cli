@@ -45,6 +45,8 @@ tix add "My task"  # Start managing tasks!
 - **Auto Shell Completion**: Tab completion works out of the box for bash, zsh, and fish
 - **Attachments & Links**: Attach files or add reference URLs to tasks
 - **Open Attachments**: Use `tix open <id>` to quickly open all files/links for a task
+- **Customizable Configuration**: Personalize defaults, colors, aliases, and notifications via `~/.tix/config.yml`
+- **Interactive TUI**: Launch a full-screen terminal interface for task management
 
 ## 📖 Installation Methods
 
@@ -206,8 +208,6 @@ tix done 1
 # Mark multiple tasks as done
 tix done-all 1 3 5
 
-# Undo completion (reactivate)
-tix undo 1
 ```
 
 #### Removing Tasks
@@ -225,6 +225,16 @@ tix clear --completed
 
 # Clear all active tasks (careful!)
 tix clear --active --force
+```
+
+#### Undo/Redo Operations
+
+```bash
+# Undo the last operation (add, edit, delete, done, etc.)
+tix undo
+
+# Redo the last undone operation
+tix redo
 ```
 
 ### Advanced Features
@@ -300,6 +310,88 @@ tix report -f json -o tasks.json
 tix report --output my-tasks.txt
 ```
 
+### 🔒 Backup & Restore
+*All destructive operations (rm, clear) automatically create a backup before execution*
+
+#### Creating Backups
+
+```bash
+# Create a timestamped backup
+tix backup create
+
+# Create a backup with a custom filename
+tix backup create my-backup.json
+```
+
+#### Listing Backups
+
+```bash
+# List all available backups
+tix backup list
+```
+
+#### Restoring From Backup
+
+```bash
+# Restore using top-level command (prompts for confirmation)
+tix restore <file_name>
+
+# Skip confirmation
+tix restore <file_name> -y
+
+# Equivalent grouped command
+tix backup restore <file_name>
+```
+
+
+# 📖 Filters
+
+#### Saved Filters (Saved Searches)
+
+You can save commonly used filters so you don’t have to re-type them every time.
+
+```bash
+# Save a filter named "work" for high-priority tasks tagged "work"
+tix filter save work -t work -p high
+
+# Save filter for completed tasks
+tix filter save done-only --completed
+
+# Overwrite an existing filter (with --force)
+tix filter save work -t work -p medium --force
+````
+
+#### Listing Saved Filters
+
+```bash
+# Show all saved filters
+tix filter list
+```
+
+Example output:
+
+```
+Saved Filters:
+  • work → priority=high AND tag='work'
+  • done-only → completed
+```
+
+#### Applying Saved Filters
+
+```bash
+# Apply a saved filter
+tix filter apply --saved work
+
+# Apply directly without saving
+tix filter apply -p high -t urgent
+
+# Saved filter takes precedence over inline flags
+tix filter apply --saved work -p low   # will still use the saved 'work' filter
+```
+
+⚡ Saved filters are stored in `~/.tix/filters.json`.
+You can edit/remove the file manually, but it’s recommended to use the CLI commands.
+
 ## 🎨 Using Tab Completion
 
 Tab completion works automatically after installation:
@@ -360,6 +452,8 @@ Example structure:
 | `stats` | Show statistics | `tix stats -d` |
 | `report` | Generate report | `tix report -f json -o tasks.json` |
 | `open` | Open attachments and links for a task | `tix open 1` |
+| `config` | Manage configuration | `tix config show`, `tix config set defaults.priority high` |
+| `interactive` | Launch interactive TUI | `tix interactive` |
 
 ## 🗑️ Uninstalling TIX
 
@@ -418,6 +512,129 @@ cp ~/.tix/tasks.json my-tasks-backup.json
 ```
 
 ## 🔧 Configuration
+
+TIX supports extensive customization through a YAML configuration file located at `~/.tix/config.yml`.
+
+### Quick Start
+
+Initialize the configuration file with defaults:
+
+```bash
+tix config init
+```
+
+Or manually create `~/.tix/config.yml` using the example below.
+
+### Configuration Options
+
+#### Defaults
+
+Set default values for new tasks:
+
+```yaml
+defaults:
+  priority: medium  # Default priority: low, medium, high
+  tags: []          # Default tags to add to every task
+```
+
+Example with default tags:
+```yaml
+defaults:
+  priority: high
+  tags:
+    - work
+    - urgent
+```
+
+#### Colors
+
+Customize terminal colors:
+
+```yaml
+colors:
+  priority:
+    low: green
+    medium: yellow
+    high: red
+  status:
+    active: blue
+    completed: green
+  tags: cyan
+```
+
+#### Aliases
+
+Create shortcuts for commands:
+
+```yaml
+aliases:
+  l: ls          # tix l → tix ls
+  a: add         # tix a "task" → tix add "task"
+  d: done        # tix d 1 → tix done 1
+  r: rm          # tix r 1 → tix rm 1
+  e: edit        # tix e 1 → tix edit 1
+  p: priority    # tix p 1 high → tix priority 1 high
+  s: search      # tix s "query" → tix search "query"
+  f: filter      # tix f -p high → tix filter -p high
+```
+
+#### Notifications
+
+Control notification verbosity:
+
+```yaml
+notifications:
+  enabled: true          # Master switch
+  on_creation: true      # Show when creating tasks
+  on_update: true        # Show detailed updates
+  on_completion: true    # Show when completing tasks
+```
+
+#### Display
+
+Customize task list appearance:
+
+```yaml
+display:
+  show_ids: true         # Show task IDs
+  show_dates: false      # Show creation dates
+  compact_mode: false    # Compact view (hide tags column)
+  max_text_length: 0     # Truncate text (0 = no limit)
+```
+
+### Configuration Commands
+
+```bash
+# Initialize config file
+tix config init
+
+# Show current configuration
+tix config show
+
+# Show specific config value
+tix config show -k defaults.priority
+
+# Set a configuration value
+tix config set defaults.priority high
+tix config set defaults.tags "[work, urgent]"
+
+# Get a configuration value
+tix config get defaults.priority
+
+# Edit config in your default editor
+tix config edit
+
+# Show config file path
+tix config path
+
+# Reset to defaults
+tix config reset
+tix config reset -y  # Skip confirmation
+```
+
+### Example Configuration
+
+See `config.example.yml` in the repository for a complete example with comments.
 
 ### Environment Variables
 
