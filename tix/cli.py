@@ -4,20 +4,17 @@ import subprocess
 import platform
 import os
 import sys
+import copy
 from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
-# from tix.storage.context_storage import ContextStorage
 from tix.storage.history import HistoryManager
 from tix.storage.backup import create_backup, list_backups, restore_from_backup
 from tix.models import Task
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from datetime import datetime
-# from .storage import storage
-# from .config import CONFIG
-# from .context import context_storage
 
 console = Console()
 storage = TaskStorage()
@@ -57,7 +54,6 @@ from typing import Optional, Dict, Any
 import json
 
 
-# context_storage = ContextStorage()
 history = HistoryManager()
 
 @click.group(invoke_without_command=True)
@@ -414,11 +410,9 @@ def clear(completed, force):
     tasks = storage.load_tasks()
     if completed:
         to_clear = [t for t in tasks if getattr(t, "completed", False)]
-        remaining = [t for t in tasks if not getattr(t, "completed", False)]
         task_type = "completed"
     else:
         to_clear = [t for t in tasks if not getattr(t, "completed", False)]
-        remaining = [t for t in tasks if getattr(t, "completed", False)]
         task_type = "active"
 
     if not to_clear:
@@ -445,20 +439,12 @@ def clear(completed, force):
         console.print("[red]Aborting clear.[/red]")
         return
 
-    if hasattr(storage, "save_tasks"):
-        storage.save_tasks(remaining)
-    elif hasattr(storage, "save"):
-        storage.save(remaining)
+    if completed:
+        storage.clear_completed()
     else:
-        # fallback: try update
-        for t in remaining:
-            try:
-                storage.update_task(t)
-            except Exception:
-                pass
+        storage.clear_active()
 
     console.print(f"[green]✔[/green] Cleared {count} {task_type} task(s)")
-
 
 @cli.command()
 @click.argument("task_id", type=int)
@@ -550,32 +536,50 @@ def undo(task_id):
     storage.update_task(task)
     console.print(f"[green]✔[/green] Reactivated: {task.text}")
 
-
 @cli.command(name="done-all")
 @click.argument("task_ids", nargs=-1, type=int, required=True)
 def done_all(task_ids):
-    """Mark multiple tasks as done"""
+    """Mark multiple tasks as done (with undo/redo support)."""
+    tasks = storage.load_tasks()
+    task_map = {t.id: t for t in tasks}
+    before = {}
+    after = {}
     completed = []
     not_found = []
     already_done = []
+
     for tid in task_ids:
-        task = storage.get_task(tid)
+        task = task_map.get(tid)
         if not task:
             not_found.append(tid)
-        elif getattr(task, "completed", False):
+            continue
+        if getattr(task, "completed", False):
             already_done.append(tid)
-        else:
-            if hasattr(task, "mark_done"):
-                task.mark_done()
-            else:
-                task.completed = True
-                task.completed_at = datetime.now().isoformat()
-            storage.update_task(task)
-            completed.append((tid, getattr(task, "text", getattr(task, "task", ""))))
-    if completed:
-        console.print("[green]✔ Completed:[/green]")
-        for tid, text in completed:
-            console.print(f"  #{tid}: {text}")
+            continue
+        before[tid] = copy.deepcopy(task.to_dict())
+        task.completed = True
+        task.completed_at = datetime.now().isoformat()
+        after[tid] = task.to_dict()
+        completed.append((tid, task.text))
+        storage.update_task(task, record_history=False)
+
+    if not completed:
+        if not_found:
+            console.print(f"[red]Not found: {', '.join(map(str, not_found))}[/red]")
+        if already_done:
+            console.print(f"[yellow]Already done: {', '.join(map(str, already_done))}[/yellow]")
+        return
+
+    storage.save_tasks(list(task_map.values()))
+    storage.history.record({
+        "op": "done-all",
+        "before": before,
+        "after": after
+    })
+
+    console.print("[green]✔ Completed:[/green]")
+    for tid, text in completed:
+        console.print(f"  #{tid}: {text}")
     if already_done:
         console.print(f"[yellow]Already done: {', '.join(map(str, already_done))}[/yellow]")
     if not_found:
@@ -599,27 +603,53 @@ def priority(task_id, priority):
 
 def apply(op):
     """Re-apply an operation (used for redo)"""
-    if op["op"] == "add":
+    op_type = op["op"]
+    if op_type == "add":
         tasks = storage.load_tasks()
-        restored_task = Task.from_dict(op["after"])
-        tasks.append(restored_task)
+        tasks.append(Task.from_dict(op["after"]))
         storage.save_tasks(sorted(tasks, key=lambda t: t.id))
-    elif op["op"] == "update":
+    elif op_type == "update":
         storage.update_task(Task.from_dict(op["after"]), record_history=False)
-    elif op["op"] == "delete":
+    elif op_type == "delete":
         storage.delete_task(op["before"]["id"], record_history=False)
+    elif op_type == "done-all":
+        tasks = storage.load_tasks()
+        for tid, after_state in op["after"].items():
+            for i, t in enumerate(tasks):
+                if t.id == int(tid):
+                    tasks[i] = Task.from_dict(after_state)
+        storage.save_tasks(tasks)
+    elif op_type.startswith("clear"):
+        tasks = storage.load_tasks()
+        # remove all tasks that were cleared
+        tasks = [t for t in tasks if str(t.id) not in op["before"]]
+        storage.save_tasks(tasks)
+
 
 def apply_inverse(op):
     """Apply the inverse of an operation (used for undo)"""
-    if op["op"] == "add":
-        deleted = storage.delete_task(op["after"]["id"], record_history=False)
-    elif op["op"] == "update":
+    op_type = op["op"]
+    if op_type == "add":
+        storage.delete_task(op["after"]["id"], record_history=False)
+    elif op_type == "update":
         storage.update_task(Task.from_dict(op["before"]), record_history=False)
-    elif op["op"] == "delete":
+    elif op_type == "delete":
         tasks = storage.load_tasks()
-        restored_task = Task.from_dict(op["before"])
-        tasks.append(restored_task)
+        tasks.append(Task.from_dict(op["before"]))
         storage.save_tasks(sorted(tasks, key=lambda t: t.id))
+    elif op_type == "done-all":
+        tasks = storage.load_tasks()
+        for tid, before_state in op["before"].items():
+            for i, t in enumerate(tasks):
+                if t.id == int(tid):
+                    tasks[i] = Task.from_dict(before_state)
+        storage.save_tasks(tasks)
+    elif op_type.startswith("clear"):
+        tasks = storage.load_tasks()
+        for tid, task_data in op["before"].items():
+            tasks.append(Task.from_dict(task_data))
+        storage.save_tasks(sorted(tasks, key=lambda t: t.id))
+
 
 @cli.command()
 def undo():
@@ -642,43 +672,8 @@ def redo():
 
     apply(op)
     console.print(f"[green]✔ Redo complete[/green]")
-
-@cli.command(name="done-all")
-@click.argument("task_ids", nargs=-1, type=int, required=True)
-def done_all(task_ids):
-    """Mark multiple tasks as done"""
-    completed = []
-    not_found = []
-    already_done = []
-
-    for task_id in task_ids:
-        task = storage.get_task(task_id)
-        if not task:
-            not_found.append(task_id)
-        elif task.completed:
-            already_done.append(task_id)
-        else:
-            task.mark_done()
-            storage.update_task(task)
-            completed.append((task_id, task.text))
-
-    # Report results
-    if completed:
-        console.print("[green]✔ Completed:[/green]")
-        for tid, text in completed:
-            console.print(f"  #{tid}: {text}")
-
-    if already_done:
-        console.print(f"[yellow]Already done: {', '.join(map(str, already_done))}[/yellow]")
-
-    if not_found:
-        console.print(f"[red]Not found: {', '.join(map(str, not_found))}[/red]")
         
 @click.argument("name")
-def context(name):
-    """Switch or create context"""
-    context_storage.set_active_context(name)
-    console.print(f"[blue]Switched to context:[/blue] {name}")
 @click.argument("from_id", type=int)
 @click.argument("to_id", type=int)
 def move(from_id, to_id):
@@ -769,7 +764,6 @@ def _save_saved_filters(filters: Dict[str, Dict[str, Any]]) -> bool:
         return True
     except Exception:
         return False
-
 
 @cli.group()
 def filter():

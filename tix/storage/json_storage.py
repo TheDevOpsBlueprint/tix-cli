@@ -164,3 +164,54 @@ class TaskStorage:
     def get_attachment_dir(self, task_id: int) -> Path:
         """Return the path where attachments for a task should be stored"""
         return Path.home() / ".tix" / "attachments" / str(task_id)
+
+    def mark_all_done(self):
+        """Mark all tasks as completed (recording one history entry)"""
+        tasks = self.load_tasks()
+        before = {}
+        after = {}
+
+        for t in tasks:
+            if not t.completed:
+                before[t.id] = t.to_dict()
+                t.completed = True
+                t.completed_at = datetime.now().isoformat()
+                after[t.id] = t.to_dict()
+
+        if not before:
+            return  
+
+        self.save_tasks(tasks)
+        self.history.record({
+            "op": "done-all",
+            "before": before,
+            "after": after
+        })
+
+
+    def clear_completed(self):
+        """Remove all completed tasks (recording one history entry)"""
+        tasks = self.load_tasks()
+        completed = {t.id: t.to_dict() for t in tasks if t.completed}
+        if not completed:
+            return
+        active = [t for t in tasks if not t.completed]
+        self.save_tasks(active)
+        self.history.record({
+            "op": "clear-completed",
+            "before": completed
+        })
+
+
+    def clear_active(self):
+        """Remove all active (incomplete) tasks (recording one history entry)"""
+        tasks = self.load_tasks()
+        active = {t.id: t.to_dict() for t in tasks if not t.completed}
+        if not active:
+            return
+        completed = [t for t in tasks if t.completed]
+        self.save_tasks(completed)
+        self.history.record({
+            "op": "clear-active",
+            "before": active
+        })
