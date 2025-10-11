@@ -8,16 +8,12 @@ from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from tix.storage.json_storage import TaskStorage
-# from tix.storage.context_storage import ContextStorage
+# from tix.storage.context_storage import ContextStorage #ImportError
 from tix.storage.history import HistoryManager
 from tix.storage.backup import create_backup, list_backups, restore_from_backup
 from tix.models import Task
-from rich.prompt import Prompt
-from rich.markdown import Markdown
+from tix.utils.sort_tasks import sort_tasks
 from datetime import datetime
-# from .storage import storage
-# from .config import CONFIG
-# from .context import context_storage
 
 console = Console()
 storage = TaskStorage()
@@ -245,7 +241,9 @@ def add(task, priority, tag, attach, link, estimate):
 
 @cli.command()
 @click.option("--all", "-a", "show_all", is_flag=True, help="Show completed tasks too")
-def ls(show_all):
+@click.option("--sort-by", "-s", type=click.Choice(["priority", "created", "id", "text"]), help="Short task by")
+@click.option("--sort-order", "-o", type=click.Choice(["asc", "desc"]), help="Short order")
+def ls(show_all, sort_by, sort_order):
     """List all tasks"""
     from tix.config import CONFIG
 
@@ -253,6 +251,10 @@ def ls(show_all):
 
     if not tasks:
         console.print("[dim]No tasks found. Use 'tix add' to create one![/dim]")
+        return
+    
+    if not sort_by and sort_order:
+        console.print("[dim]Sort by is not given. Try add '--sort-by' or '-s'[/dim]")
         return
 
     # Get display settings from config
@@ -280,8 +282,11 @@ def ls(show_all):
         table.add_column("Created", style="dim")
 
     count = dict()
-
-    for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
+    
+    # Sorting
+    sorted_tasks = sort_tasks(tasks, sort_by, sort_order)
+    
+    for task in sorted_tasks:
         status = "✔" if getattr(task, "completed", False) else "○"
         priority_color = priority_colors.get(getattr(task, "priority", "medium"),
                                             {'high': 'red', 'medium': 'yellow', 'low': 'green'}[getattr(task, "priority", "medium")])

@@ -197,6 +197,13 @@ tix ls
 # Show all tasks (including completed)
 tix ls --all
 tix ls -a
+
+# Show sorted tasks
+tix ls --sort-by [priority, text, id, created]
+tix ls -s [priority, text, id, created]
+
+tix ls --sort-by priority --sort-order [asc, desc]
+tix ls -s priority -o [asc, desc]
 ```
 
 #### Completing Tasks
@@ -437,7 +444,7 @@ Example structure:
 | Command | Description | Example |
 |---------|-------------|---------|
 | `add` | Add a new task | `tix add "Task" -p high -t work -f file.txt -l https://example.com` |
-| `ls` | List tasks | `tix ls --all` |
+| `ls` | List tasks | `tix ls --all --sort-by priority --sort-order asc` |
 | `done` | Complete a task | `tix done 1` |
 | `done-all` | Complete multiple tasks | `tix done-all 1 2 3` |
 | `rm` | Remove a task | `tix rm 1 -y` |
