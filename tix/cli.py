@@ -33,7 +33,7 @@ def parse_time_estimate(time_str: str) -> int:
     """Parse time string like '2h', '30m', '1h30m' into minutes"""
     time_str = time_str.lower().strip()
     total_minutes = 0
-    
+
     if 'h' in time_str:
         parts = time_str.split('h')
         hours = int(parts[0])
@@ -46,7 +46,7 @@ def parse_time_estimate(time_str: str) -> int:
         total_minutes = int(time_str.replace('m', ''))
     else:
         total_minutes = int(time_str)
-    
+
     return total_minutes
 
 
@@ -187,6 +187,9 @@ def restore(backup_file, data_file, yes):
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
 @click.option('--estimate', '-e', help='Time estimate (e.g., 2h, 30m, 1h30m)')
+@click.option('--repeat', '-r',
+              type=click.Choice(['daily', 'monthly', 'weekly']),
+              help='Set task priority')
 def add(task, priority, tag, attach, link, estimate, repeat):
     """Add a new task"""
     from tix.config import CONFIG
@@ -206,11 +209,11 @@ def add(task, priority, tag, attach, link, estimate, repeat):
     # Use config defaults if not specified
     if priority is None:
         priority = CONFIG.get('defaults', {}).get('priority', 'medium')
-    
+
     # Merge config default tags with provided tags
     default_tags = CONFIG.get('defaults', {}).get('tags', [])
     all_tags = list(set(list(tag) + default_tags))
-    
+
     new_task = storage.add_task(task, priority, all_tags, estimate=estimate_minutes)
     # Handle attachments
     if attach:
@@ -235,14 +238,15 @@ def add(task, priority, tag, attach, link, estimate, repeat):
         new_task.links.extend(link)
 
     # Handles repetition
-    if repeat:
+    if repeat and repeat not in new_task.tags:
         new_task.repeats = repeat
+        new_task.tags.append(repeat)
 
     storage.update_task(new_task, record_history=False)
 
     color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
     console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]")
-    
+
     # Show notification if enabled
     if CONFIG.get('notifications', {}).get('on_creation', True):
         if all_tags:
@@ -286,32 +290,9 @@ def ls(show_all):
     table.add_column("Priority", width=8)
     table.add_column("Task")
     table.add_column("Tags", style="dim")
-    table.add_column("Repeat", width=8)
+    table.add_column("Due", width=10)
     count = dict()
 
-    for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
-        status = "✔" if task.completed else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}[task.priority]
-        tags_str = ", ".join(task.tags) if task.tags else ""
-        repeat_str = task.repeats
-    if not compact_mode:
-        table.add_column("Tags", style=tag_color)
-    if show_dates:
-        table.add_column("Created", style="dim")
-
-    count = dict()
-
-    task_style = "dim strike" if task.completed else ""
-    table.add_row(
-        str(task.id),
-        status,
-        f"[{priority_color}]{task.priority}[/{priority_color}]",
-        f"[{task_style}]{task.text}[/{task_style}]{attach_icon}" if task.completed else f"{task.text}{attach_icon}",
-        tags_str,
-        repeat_str
-
-    )
-    count[task.completed] = count.get(task.completed, 0) + 1
     for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
         status = "✔" if getattr(task, "completed", False) else "○"
         priority_color = priority_colors.get(getattr(task, "priority", "medium"),
@@ -319,6 +300,13 @@ def ls(show_all):
         tags_str = ", ".join(getattr(task, "tags", [])) if getattr(task, "tags", None) else ""
 
         attach_icon = " 📎" if getattr(task, "attachments", None) or getattr(task, "links", None) else ""
+        due_str = ""
+        if getattr(task, "due", None):
+            try:
+                due_date = date.fromisoformat(task.due)
+                due_str = due_date.strftime("%Y-%m-%d")
+            except ValueError:
+                due_str = task.due
 
         # text truncation
         text_val = getattr(task, "text", getattr(task, "task", ""))
@@ -337,6 +325,7 @@ def ls(show_all):
             row.append(f"{text_val}{attach_icon}")
         if not compact_mode:
             row.append(tags_str)
+        row.append(due_str)
         if show_dates:
             created = getattr(task, "created", getattr(task, "created_at", None))
             if created:
@@ -402,10 +391,17 @@ def done(task_id):
         elif task.repeats == "monthly":
             next_task_date = completed_date + relativedelta(months=1)
 
-        console.print(f"[bold green]➜[/bold green] New '{task.repeats}' task created for {next_task_date.isoformat()}")
+        due_str = next_task_date.isoformat() if next_task_date else None
 
-        if date.today() == next_task_date:
-            new_task = storage.add_task(task.text, task.priority, task.tags)
+        new_task = storage.add_task(
+            task.text,
+            task.priority,
+            task.tags,
+            repeat=task.repeats,
+            due=due_str
+        )
+        console.print(f"[bold green]➜[/bold green] New '{task.repeats}' task due on {due_str}")
+
 
 
 @cli.command()
@@ -727,7 +723,7 @@ def done_all(task_ids):
 
     if not_found:
         console.print(f"[red]Not found: {', '.join(map(str, not_found))}[/red]")
-        
+
 @click.argument("name")
 def context(name):
     """Switch or create context"""
@@ -1246,22 +1242,22 @@ def start(task_id):
     if not task:
         console.print(f"[red]✗[/red] Task #{task_id} not found")
         return
-    
+
     if task.completed:
         console.print(f"[yellow]![/yellow] Cannot start timer on completed task")
         return
-    
+
     for t in storage.load_tasks():
         if t.is_timer_running() and t.id != task_id:
             console.print(f"[yellow]![/yellow] Task #{t.id} timer is already running")
             console.print(f"[dim]Stop it first with: tix stop {t.id}[/dim]")
             return
-    
+
     if task.is_timer_running():
         duration = task.get_current_session_duration()
         console.print(f"[yellow]![/yellow] Timer already running for {task.format_time(duration)}")
         return
-    
+
     try:
         task.start_timer()
         storage.update_task(task)
@@ -1280,19 +1276,19 @@ def stop(task_id):
     if not task:
         console.print(f"[red]✗[/red] Task #{task_id} not found")
         return
-    
+
     if not task.is_timer_running():
         console.print(f"[yellow]![/yellow] No timer running for task #{task_id}")
         return
-    
+
     try:
         duration = task.stop_timer()
         storage.update_task(task)
-        
+
         console.print(f"[green]⏹[/green] Stopped timer for task #{task_id}")
         console.print(f"[cyan]  Session duration: {task.format_time(duration)}[/cyan]")
         console.print(f"[dim]  Total time spent: {task.format_time(task.time_spent)}[/dim]")
-        
+
         if task.estimate:
             remaining = task.get_time_remaining()
             if remaining > 0:
@@ -1314,7 +1310,7 @@ def status(task_id):
         if not task:
             console.print(f"[red]✗[/red] Task #{task_id} not found")
             return
-        
+
         if task.is_timer_running():
             duration = task.get_current_session_duration()
             console.print(f"[green]⏱[/green] Timer running for task #{task_id}: {task.text}")
@@ -1327,7 +1323,7 @@ def status(task_id):
     else:
         tasks = storage.load_tasks()
         running_tasks = [t for t in tasks if t.is_timer_running()]
-        
+
         if running_tasks:
             for task in running_tasks:
                 duration = task.get_current_session_duration()
@@ -1338,15 +1334,15 @@ def status(task_id):
 
 
 @cli.command()
-@click.option('--period', '-p', type=click.Choice(['week', 'month', 'all']), 
+@click.option('--period', '-p', type=click.Choice(['week', 'month', 'all']),
               default='week', help='Time period for report')
 def timereport(period):
     """Generate time tracking report"""
     from datetime import timedelta
-    
+
     tasks = storage.load_tasks()
     now = datetime.now()
-    
+
     if period == 'week':
         start_date = now - timedelta(days=7)
         title = "Weekly Time Report"
@@ -1356,24 +1352,24 @@ def timereport(period):
     else:
         start_date = None
         title = "All Time Report"
-    
+
     relevant_tasks = []
     for task in tasks:
         if task.time_spent > 0:
             if start_date:
-                task_logs = [log for log in task.time_logs 
+                task_logs = [log for log in task.time_logs
                            if datetime.fromisoformat(log['ended_at']) >= start_date]
                 if task_logs:
                     relevant_tasks.append((task, sum(log['duration'] for log in task_logs)))
             else:
                 relevant_tasks.append((task, task.time_spent))
-    
+
     if not relevant_tasks:
         console.print(f"[dim]No time tracked in the {period}[/dim]")
         return
-    
+
     console.print(f"\n[bold cyan]{title}[/bold cyan]\n")
-    
+
     table = Table()
     table.add_column("ID", style="cyan", width=4)
     table.add_column("Task")
@@ -1381,14 +1377,14 @@ def timereport(period):
     table.add_column("Spent", style="yellow", width=10)
     table.add_column("Remaining", width=10)
     table.add_column("Status", width=8)
-    
+
     total_estimated = 0
     total_spent = 0
-    
+
     for task, time_in_period in relevant_tasks:
         estimate_str = task.format_time(task.estimate) if task.estimate else "-"
         spent_str = task.format_time(time_in_period)
-        
+
         if task.estimate:
             total_estimated += task.estimate
             remaining = task.get_time_remaining()
@@ -1408,9 +1404,9 @@ def timereport(period):
             remaining_str = "-"
             status = "✓" if task.completed else "→"
             status_color = "green" if task.completed else "blue"
-        
+
         total_spent += time_in_period
-        
+
         table.add_row(
             str(task.id),
             task.text[:40] + "..." if len(task.text) > 40 else task.text,
@@ -1419,9 +1415,9 @@ def timereport(period):
             remaining_str,
             f"[{status_color}]{status}[/{status_color}]"
         )
-    
+
     console.print(table)
-    
+
     console.print(f"\n[bold]Summary:[/bold]")
     if total_estimated > 0:
         console.print(f"  Total estimated: {format_time_helper(total_estimated)}")

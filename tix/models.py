@@ -15,12 +15,13 @@ class Task:
     attachments: List[str] = field(default_factory=list)
     links: List[str] = field(default_factory=list)
     repeats: Optional[str] = None
-    
+
     # Time tracking fields
     estimate: Optional[int] = None
     time_spent: int = 0
     started_at: Optional[str] = None
     time_logs: List[Dict] = field(default_factory=list)
+    due: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert task to dictionary for JSON serialization"""
@@ -34,11 +35,12 @@ class Task:
             'tags': self.tags,
             'attachments': self.attachments,
             'links': self.links,
-            'repeats': self.repeats
+            'repeats': self.repeats,
             'estimate': self.estimate,
             'time_spent': self.time_spent,
             'started_at': self.started_at,
-            'time_logs': self.time_logs
+            'time_logs': self.time_logs,
+            "due": self.due
         }
 
     @classmethod
@@ -54,11 +56,12 @@ class Task:
             tags=data.get('tags', []),
             attachments=data.get('attachments', []),
             links=data.get('links', []),
-            repeats=data.get('repeats')
+            repeats=data.get('repeats'),
             estimate=data.get('estimate'),
             time_spent=data.get('time_spent', 0),
             started_at=data.get('started_at'),
-            time_logs=data.get('time_logs', [])
+            time_logs=data.get('time_logs', []),
+            due=data.get("due")
         )
 
     def mark_done(self):
@@ -81,20 +84,20 @@ class Task:
         """Stop tracking time and log the duration"""
         if not self.started_at:
             raise ValueError("Timer not running for this task")
-        
+
         start_time = datetime.fromisoformat(self.started_at)
         end_time = datetime.now()
         duration = int((end_time - start_time).total_seconds() / 60)
-        
+
         self.time_logs.append({
             'started_at': self.started_at,
             'ended_at': end_time.isoformat(),
             'duration': duration
         })
-        
+
         self.time_spent += duration
         self.started_at = None
-        
+
         return duration
 
     def is_timer_running(self) -> bool:

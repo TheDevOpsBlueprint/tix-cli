@@ -1,8 +1,9 @@
 import json
+from datetime import datetime, date
 from pathlib import Path
 from typing import List, Optional
 from tix.models import Task
-from tix.storage.history import HistoryManager 
+from tix.storage.history import HistoryManager
 
 
 class TaskStorage:
@@ -11,7 +12,7 @@ class TaskStorage:
     def __init__(self, storage_path: Path = None, context: str = None, history: HistoryManager = None):
         """Initialize storage with default or custom path and context"""
         self.context = context or self._get_active_context()
-        
+
         # Use context-specific storage path
         if storage_path:
             self.storage_path = storage_path
@@ -21,7 +22,7 @@ class TaskStorage:
                 self.storage_path = base_dir / "tasks.json"
             else:
                 self.storage_path = base_dir / "contexts" / f"{self.context}.json"
-        
+
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_file()
 
@@ -89,17 +90,18 @@ class TaskStorage:
         data["tasks"] = [task.to_dict() for task in tasks]
         self._write_data(data)
 
-    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None, estimate: int = None, due: str = None, is_global: bool = False, record_history: bool = True) -> Task:
+    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None, estimate: int = None, due: str = None, is_global: bool = False, record_history: bool = True, repeat: str = None) -> Task:
         """Add a new task and return it"""
         data = self._read_data()
         new_id = data["next_id"]
         new_task = Task(
-            id=new_id, 
-            text=text, 
-            priority=priority, 
+            id=new_id,
+            text=text,
+            priority=priority,
             tags=tags or [],
             estimate=estimate,
             repeats=repeat,
+            due=due.isoformat() if isinstance(due, (date, datetime)) else due
         )
         data["tasks"].append(new_task.to_dict())
         data["next_id"] = new_id + 1
