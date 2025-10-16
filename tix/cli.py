@@ -91,7 +91,11 @@ def add(task, priority, tag, attach, link, is_global):
 
 @cli.command()
 @click.option("--all", "-a", is_flag=True, help="Show completed tasks too")
-def ls(all):
+@click.option("--compact", "-c", is_flag=True, help="Compact mode (hide tags)")
+@click.option("--show-ids", is_flag=True, help="Show task IDs")
+@click.option("--show-dates", is_flag=True, help="Show creation dates")
+@click.option("--max-text-length", type=int, help="Maximum text length before truncation")
+def ls(all, compact, show_ids, show_dates, max_text_length):
     """List all tasks"""
     tasks = storage.load_tasks() if all else storage.get_active_tasks()
 
@@ -105,13 +109,19 @@ def ls(all):
         title += f" [dim]({active_context})[/dim]"
 
     table = Table(title=title)
-    table.add_column("ID", style="cyan", width=4)
+    
+    # Add columns based on options
+    if show_ids:
+        table.add_column("ID", style="cyan", width=4)
     table.add_column("✔", width=3)
     table.add_column("Priority", width=8)
     table.add_column("Task")
     table.add_column("Progress", style="dim", width=12)
-    table.add_column("Tags", style="dim")
+    if not compact:
+        table.add_column("Tags", style="dim")
     table.add_column("Scope", style="dim", width=6)
+    if show_dates:
+        table.add_column("Created", style="dim")
     
     count = dict()
 
@@ -123,6 +133,11 @@ def ls(all):
 
         # Show paperclip if task has attachments or links
         attach_icon = " 📎" if task.attachments or task.links else ""
+
+        # Text truncation
+        text_val = task.text
+        if max_text_length and max_text_length > 0 and len(text_val) > max_text_length:
+            text_val = text_val[:max_text_length - 3] + "..."
 
         # Show progress bar for parent tasks
         progress_str = ""
@@ -140,15 +155,32 @@ def ls(all):
             progress_str = ""
 
         task_style = "dim strike" if task.completed else ""
-        table.add_row(
-            str(task.id),
-            status,
-            f"[{priority_color}]{task.priority}[/{priority_color}]",
-            f"[{task_style}]{task.text}[/{task_style}]{attach_icon}" if task.completed else f"{task.text}{attach_icon}",
-            progress_str,
-            tags_str,
-            scope
-        )
+        
+        # Build row based on options
+        row = []
+        if show_ids:
+            row.append(str(task.id))
+        row.append(status)
+        row.append(f"[{priority_color}]{task.priority}[/{priority_color}]")
+        if task.completed:
+            row.append(f"[{task_style}]{text_val}[/{task_style}]{attach_icon}")
+        else:
+            row.append(f"{text_val}{attach_icon}")
+        row.append(progress_str)
+        if not compact:
+            row.append(tags_str)
+        row.append(scope)
+        if show_dates:
+            if task.created_at:
+                try:
+                    created_date = datetime.fromisoformat(task.created_at).strftime('%Y-%m-%d')
+                    row.append(created_date)
+                except:
+                    row.append("")
+            else:
+                row.append("")
+        
+        table.add_row(*row)
         count[task.completed] = count.get(task.completed, 0) + 1
 
     console.print(table)

@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 @dataclass
 class Task:
@@ -18,6 +18,12 @@ class Task:
     parent_id: Optional[int] = None  # ID of parent task (for subtasks)
     subtasks: List[int] = field(default_factory=list)  # List of subtask IDs
     notes: str = ""  # Additional notes/checklist for the task
+    
+    # Time tracking fields
+    estimate: Optional[int] = None
+    time_spent: int = 0
+    started_at: Optional[str] = None
+    time_logs: List[Dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert task to dictionary for JSON serialization"""
@@ -34,7 +40,11 @@ class Task:
             'is_global': self.is_global,
             'parent_id': self.parent_id,
             'subtasks': self.subtasks,
-            'notes': self.notes
+            'notes': self.notes,
+            'estimate': self.estimate,
+            'time_spent': self.time_spent,
+            'started_at': self.started_at,
+            'time_logs': self.time_logs
         }
 
     @classmethod
@@ -53,6 +63,14 @@ class Task:
             data['subtasks'] = []
         if 'notes' not in data:
             data['notes'] = ""
+        if 'estimate' not in data:
+            data['estimate'] = None
+        if 'time_spent' not in data:
+            data['time_spent'] = 0
+        if 'started_at' not in data:
+            data['started_at'] = None
+        if 'time_logs' not in data:
+            data['time_logs'] = []
         return cls(**data)
 
     def mark_done(self):
@@ -92,6 +110,12 @@ class Task:
         if self.parent_id is None:
             return 0
         return 1  # For now, we'll implement 2-level nesting later
+
+    def start_timer(self):
+        """Start tracking time for this task"""
+        if self.started_at:
+            raise ValueError("Timer already running for this task")
+        self.started_at = datetime.now().isoformat()
 
 
 @dataclass
