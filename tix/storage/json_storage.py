@@ -89,8 +89,12 @@ class TaskStorage:
         data["tasks"] = [task.to_dict() for task in tasks]
         self._write_data(data)
 
-    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None, estimate: int = None, due: str = None, is_global: bool = False, record_history: bool = True) -> Task:
-        """Add a new task and return it"""
+    def add_task(self, text: str, priority: str = 'medium', tags: List[str] = None, 
+                 estimate: int = None, owner: str = None, reviewer: str = None,
+                 status: str = 'todo', due_at: str = None, handoff_note: str = None,
+                 blocked_by: List[int] = None, incident: bool = False,
+                 record_history: bool = True) -> Task:
+        """Add a new task and return it (with team collaboration fields)"""
         data = self._read_data()
         new_id = data["next_id"]
         new_task = Task(
@@ -99,6 +103,13 @@ class TaskStorage:
             priority=priority, 
             tags=tags or [],
             estimate=estimate,
+            owner=owner,
+            reviewer=reviewer,
+            status=status,
+            due_at=due_at,
+            handoff_note=handoff_note,
+            blocked_by=blocked_by or [],
+            incident=incident,
         )
         data["tasks"].append(new_task.to_dict())
         data["next_id"] = new_id + 1
