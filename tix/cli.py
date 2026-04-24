@@ -361,7 +361,7 @@ def add(task, priority, tag, attach, link, estimate,
 @click.option("--all", "-a", "show_all", is_flag=True, help="Show completed tasks too")
 @click.option("--owner", "-o", help="Filter by owner (use 'none' for unassigned)")
 @click.option("--reviewer", "-r", help="Filter by reviewer (use 'none' for no reviewer)")
-@click.option("--task-status", "-s", "task_status", type=click.Choice(STATUS_CHOICES), help="Filter by status")
+@click.option("--status", "-s", type=click.Choice(STATUS_CHOICES), help="Filter by task status")
 @click.option("--blocked", "-b", is_flag=True, help="Show only blocked tasks")
 @click.option("--incident", "-i", is_flag=True, help="Show only incident tasks")
 @click.option("--overdue", is_flag=True, help="Show only overdue tasks")
@@ -370,7 +370,7 @@ def add(task, priority, tag, attach, link, estimate,
 @click.option("--detailed", "-d", is_flag=True, help="Show detailed view with owner, status, due date")
 @click.option("--priority", "-p", type=click.Choice(['low', 'medium', 'high']), help="Filter by priority")
 @click.option("--tag", "-t", help="Filter by tag")
-def ls(show_all, owner, reviewer, task_status, blocked, incident, overdue, 
+def ls(show_all, owner, reviewer, status, blocked, incident, overdue, 
        due_soon, no_handoff, detailed, priority, tag):
     """List tasks with team collaboration filters and display"""
     from tix.config import CONFIG
@@ -397,8 +397,8 @@ def ls(show_all, owner, reviewer, task_status, blocked, incident, overdue,
             tasks = [t for t in tasks if t.reviewer and t.reviewer.lower() == reviewer.lower()]
 
     # Apply status filter
-    if task_status:
-        tasks = [t for t in tasks if t.status == task_status]
+    if status:
+        tasks = [t for t in tasks if t.status == status]
 
     # Apply blocked filter
     if blocked:
@@ -1109,8 +1109,20 @@ def filter():
 @click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
 @click.option("--tag", "-t", help="Filter by tag")
 @click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
-@click.option("--saved", "-s", "saved_name", help="Apply a saved filter by name")
-def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optional[bool], saved_name: Optional[str]):
+@click.option("--owner", "-o", help="Filter by owner (use 'none' for unassigned)")
+@click.option("--reviewer", "-r", help="Filter by reviewer (use 'none' for no reviewer)")
+@click.option("--status", "-s", type=click.Choice(STATUS_CHOICES), help="Filter by task status")
+@click.option("--blocked", "-b", is_flag=True, help="Show only blocked tasks")
+@click.option("--incident", "-i", is_flag=True, help="Show only incident tasks")
+@click.option("--overdue", is_flag=True, help="Show only overdue tasks")
+@click.option("--due-soon", is_flag=True, help="Show only tasks due soon")
+@click.option("--no-handoff", is_flag=True, help="Show only tasks needing handoff notes")
+@click.option("--detailed", "-d", is_flag=True, help="Show detailed view")
+@click.option("--saved", "-S", "saved_name", help="Apply a saved filter by name (uppercase -S)")
+def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optional[bool],
+                 owner: Optional[str], reviewer: Optional[str], status: Optional[str],
+                 blocked: bool, incident: bool, overdue: bool, due_soon: bool, 
+                 no_handoff: bool, detailed: bool, saved_name: Optional[str]):
     """
     Apply a filter (immediately). Use --saved <name> to apply saved filters.
     If --saved is provided, any inline options are ignored (saved filter takes precedence).
@@ -1124,19 +1136,58 @@ def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optiona
         priority = saved.get("priority")
         tag = saved.get("tag")
         completed = saved.get("completed")
+        owner = saved.get("owner")
+        reviewer = saved.get("reviewer")
+        status = saved.get("status")
+        blocked = saved.get("blocked", False)
+        incident = saved.get("incident", False)
+        overdue = saved.get("overdue", False)
+        due_soon = saved.get("due_soon", False)
+        no_handoff = saved.get("no_handoff", False)
 
-    # Now perform filtering (same UX as previous 'filter' command)
+    # Now perform filtering
     tasks = storage.load_tasks() if hasattr(storage, "load_tasks") else []
 
     # completion filter: None = all, True = completed, False = active
     if completed is not None:
-        tasks = [t for t in tasks if getattr(t, "completed", False) == completed]
+        tasks = [t for t in tasks if t.completed == completed]
 
     if priority:
-        tasks = [t for t in tasks if getattr(t, "priority", None) == priority]
+        tasks = [t for t in tasks if t.priority == priority]
 
     if tag:
-        tasks = [t for t in tasks if tag in getattr(t, "tags", [])]
+        tasks = [t for t in tasks if tag in t.tags]
+    
+    # Team collaboration filters
+    if owner is not None:
+        if owner.lower() == 'none':
+            tasks = [t for t in tasks if not t.has_owner()]
+        else:
+            tasks = [t for t in tasks if t.owner and t.owner.lower() == owner.lower()]
+    
+    if reviewer is not None:
+        if reviewer.lower() == 'none':
+            tasks = [t for t in tasks if not t.has_reviewer()]
+        else:
+            tasks = [t for t in tasks if t.reviewer and t.reviewer.lower() == reviewer.lower()]
+    
+    if status:
+        tasks = [t for t in tasks if t.status == status]
+    
+    if blocked:
+        tasks = [t for t in tasks if t.is_blocked()]
+    
+    if incident:
+        tasks = [t for t in tasks if t.is_incident_task()]
+    
+    if overdue:
+        tasks = [t for t in tasks if t.is_overdue()]
+    
+    if due_soon:
+        tasks = [t for t in tasks if t.is_due_soon(days=2)]
+    
+    if no_handoff:
+        tasks = [t for t in tasks if t.needs_handoff()]
 
     if not tasks:
         console.print("[dim]No matching tasks[/dim]")
@@ -1150,27 +1201,99 @@ def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optiona
         filters_desc.append(f"tag='{tag}'")
     if completed is not None:
         filters_desc.append("completed" if completed else "active")
+    if owner:
+        filters_desc.append(f"owner={owner}")
+    if reviewer:
+        filters_desc.append(f"reviewer={reviewer}")
+    if status:
+        filters_desc.append(f"status={status}")
+    if blocked:
+        filters_desc.append("blocked")
+    if incident:
+        filters_desc.append("incident")
+    if overdue:
+        filters_desc.append("overdue")
+    if due_soon:
+        filters_desc.append("due-soon")
+    if no_handoff:
+        filters_desc.append("needs-handoff")
+    
     filter_desc = " AND ".join(filters_desc) if filters_desc else "all"
     console.print(f"[bold]{len(tasks)} task(s) matching [{filter_desc}]:[/bold]\n")
 
-    table = Table()
-    table.add_column("ID", style="cyan", width=4)
-    table.add_column("✔", width=3)
-    table.add_column("Priority", width=8)
-    table.add_column("Task")
-    table.add_column("Tags", style="dim")
+    # Build table based on detailed mode
+    if detailed:
+        table = Table()
+        table.add_column("ID", style="cyan", width=4)
+        table.add_column("✔", width=3)
+        table.add_column("Pri", width=4)
+        table.add_column("Status", width=12)
+        table.add_column("Owner", width=10)
+        table.add_column("Due", width=16)
+        table.add_column("Task")
+        table.add_column("Tags", style="dim")
 
-    for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
-        status = "✔" if getattr(task, "completed", False) else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(getattr(task, "priority", "medium"), "yellow")
-        tags_str = ", ".join(getattr(task, "tags", [])) if getattr(task, "tags", None) else ""
-        table.add_row(
-            str(getattr(task, "id", "")),
-            status,
-            f"[{priority_color}]{getattr(task, 'priority', '')}[/{priority_color}]",
-            getattr(task, "text", getattr(task, "task", "")),
-            tags_str,
-        )
+        for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
+            check_status = "✔" if task.completed else "○"
+            priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(task.priority, "yellow")
+            tags_str = ", ".join(task.tags) if task.tags else ""
+            status_color = task.get_status_color()
+            status_display = task.status.replace('_', '-')
+            
+            # Icons for special tasks
+            icons = []
+            if task.incident:
+                icons.append("🔴")
+            if task.is_blocked():
+                icons.append("🚫")
+            if task.is_overdue():
+                icons.append("⏰")
+            if task.needs_handoff():
+                icons.append("📋")
+            icon_str = " " + " ".join(icons) if icons else ""
+            
+            table.add_row(
+                str(task.id),
+                check_status,
+                f"[{priority_color}]{task.priority[:3]}[/{priority_color}]",
+                f"[{status_color}]{status_display}[/{status_color}]",
+                task.owner or "-",
+                task.get_due_date_display(),
+                f"{task.text}{icon_str}",
+                tags_str,
+            )
+    else:
+        table = Table()
+        table.add_column("ID", style="cyan", width=4)
+        table.add_column("✔", width=3)
+        table.add_column("Priority", width=8)
+        table.add_column("Task")
+        table.add_column("Tags", style="dim")
+
+        for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
+            check_status = "✔" if task.completed else "○"
+            priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(task.priority, "yellow")
+            tags_str = ", ".join(task.tags) if task.tags else ""
+            
+            # Icons for special tasks
+            icons = []
+            if task.incident:
+                icons.append("🔴")
+            if task.is_blocked():
+                icons.append("🚫")
+            if task.is_overdue():
+                icons.append("⏰")
+            if task.needs_handoff():
+                icons.append("📋")
+            icon_str = " " + " ".join(icons) if icons else ""
+            
+            table.add_row(
+                str(task.id),
+                check_status,
+                f"[{priority_color}]{task.priority}[/{priority_color}]",
+                f"{task.text}{icon_str}",
+                tags_str,
+            )
 
     console.print(table)
 
@@ -1180,11 +1303,22 @@ def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optiona
 @click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
 @click.option("--tag", "-t", help="Filter by tag")
 @click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
+@click.option("--owner", "-o", help="Filter by owner (use 'none' for unassigned)")
+@click.option("--reviewer", "-r", help="Filter by reviewer (use 'none' for no reviewer)")
+@click.option("--status", "-s", type=click.Choice(STATUS_CHOICES), help="Filter by task status")
+@click.option("--blocked", "-b", is_flag=True, help="Filter by blocked")
+@click.option("--incident", "-i", is_flag=True, help="Filter by incident")
+@click.option("--overdue", is_flag=True, help="Filter by overdue")
+@click.option("--due-soon", is_flag=True, help="Filter by due-soon")
+@click.option("--no-handoff", is_flag=True, help="Filter by no-handoff")
 @click.option("--force", "-f", is_flag=True, help="Overwrite existing saved filter of same name")
-def filter_save(name: str, priority: Optional[str], tag: Optional[str], completed: Optional[bool], force: bool):
+def filter_save(name: str, priority: Optional[str], tag: Optional[str], completed: Optional[bool],
+                owner: Optional[str], reviewer: Optional[str], status: Optional[str],
+                blocked: bool, incident: bool, overdue: bool, due_soon: bool, 
+                no_handoff: bool, force: bool):
     """
     Save a filter under <name>. Later you can apply it with `tix filter apply --saved <name>`.
-    Example: tix filter save work -t work -p high
+    Example: tix filter save oncall -o alice --incident
     """
     filters = _load_saved_filters()
     if name in filters and not force:
@@ -1194,7 +1328,14 @@ def filter_save(name: str, priority: Optional[str], tag: Optional[str], complete
     storage_obj = {
         "priority": priority,
         "tag": tag,
-        # store completed as True/False/null
+        "owner": owner,
+        "reviewer": reviewer,
+        "status": status,
+        "blocked": blocked if blocked else None,
+        "incident": incident if incident else None,
+        "overdue": overdue if overdue else None,
+        "due_soon": due_soon if due_soon else None,
+        "no_handoff": no_handoff if no_handoff else None,
         "completed": None if completed is None else (True if completed else False),
         "saved_at": datetime.now().isoformat()
     }
@@ -1210,6 +1351,22 @@ def filter_save(name: str, priority: Optional[str], tag: Optional[str], complete
             parts.append(f"-p {storage_obj['priority']}")
         if "tag" in storage_obj:
             parts.append(f"-t {storage_obj['tag']}")
+        if "owner" in storage_obj:
+            parts.append(f"-o {storage_obj['owner']}")
+        if "reviewer" in storage_obj:
+            parts.append(f"-r {storage_obj['reviewer']}")
+        if "status" in storage_obj:
+            parts.append(f"-s {storage_obj['status']}")
+        if storage_obj.get("blocked"):
+            parts.append("-b")
+        if storage_obj.get("incident"):
+            parts.append("-i")
+        if storage_obj.get("overdue"):
+            parts.append("--overdue")
+        if storage_obj.get("due_soon"):
+            parts.append("--due-soon")
+        if storage_obj.get("no_handoff"):
+            parts.append("--no-handoff")
         if "completed" in storage_obj:
             parts.append("--completed" if storage_obj["completed"] else "--active")
         if parts:
@@ -1237,6 +1394,22 @@ def filter_list():
             parts.append(f"priority={obj['priority']}")
         if "tag" in obj:
             parts.append(f"tag='{obj['tag']}'")
+        if "owner" in obj:
+            parts.append(f"owner={obj['owner']}")
+        if "reviewer" in obj:
+            parts.append(f"reviewer={obj['reviewer']}")
+        if "status" in obj:
+            parts.append(f"status={obj['status']}")
+        if obj.get("blocked"):
+            parts.append("blocked")
+        if obj.get("incident"):
+            parts.append("incident")
+        if obj.get("overdue"):
+            parts.append("overdue")
+        if obj.get("due_soon"):
+            parts.append("due-soon")
+        if obj.get("no_handoff"):
+            parts.append("needs-handoff")
         if "completed" in obj:
             parts.append("completed" if obj["completed"] else "active")
         filter_desc = " AND ".join(parts) if parts else "all"
