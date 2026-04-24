@@ -1,10 +1,13 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict
+
+STATUS_CHOICES = ['todo', 'in_progress', 'review', 'blocked', 'done']
+
 
 @dataclass
 class Task:
-    """Task model with all necessary properties"""
+    """Task model with all necessary properties for team collaboration"""
     id: int
     text: str
     priority: str = 'medium'
@@ -20,6 +23,15 @@ class Task:
     time_spent: int = 0
     started_at: Optional[str] = None
     time_logs: List[Dict] = field(default_factory=list)
+    
+    # Team collaboration fields (new)
+    owner: Optional[str] = None
+    reviewer: Optional[str] = None
+    status: str = 'todo'
+    due_at: Optional[str] = None
+    handoff_note: Optional[str] = None
+    blocked_by: List[int] = field(default_factory=list)
+    incident: bool = False
 
     def to_dict(self) -> dict:
         """Convert task to dictionary for JSON serialization"""
@@ -36,12 +48,20 @@ class Task:
             'estimate': self.estimate,
             'time_spent': self.time_spent,
             'started_at': self.started_at,
-            'time_logs': self.time_logs
+            'time_logs': self.time_logs,
+            # Team collaboration fields
+            'owner': self.owner,
+            'reviewer': self.reviewer,
+            'status': self.status,
+            'due_at': self.due_at,
+            'handoff_note': self.handoff_note,
+            'blocked_by': self.blocked_by,
+            'incident': self.incident,
         }
 
     @classmethod
     def from_dict(cls, data: dict):
-        """Create task from dictionary (handles old tasks safely)"""
+        """Create task from dictionary (handles old tasks safely with backward compatibility)"""
         return cls(
             id=data['id'],
             text=data['text'],
@@ -55,12 +75,21 @@ class Task:
             estimate=data.get('estimate'),
             time_spent=data.get('time_spent', 0),
             started_at=data.get('started_at'),
-            time_logs=data.get('time_logs', [])
+            time_logs=data.get('time_logs', []),
+            # Team collaboration fields with safe defaults
+            owner=data.get('owner'),
+            reviewer=data.get('reviewer'),
+            status=data.get('status', 'todo'),
+            due_at=data.get('due_at'),
+            handoff_note=data.get('handoff_note'),
+            blocked_by=data.get('blocked_by', []),
+            incident=data.get('incident', False),
         )
 
     def mark_done(self):
         """Mark task as completed with timestamp"""
         self.completed = True
+        self.status = 'done'
         self.completed_at = datetime.now().isoformat()
 
     def add_tag(self, tag: str):
@@ -121,3 +150,114 @@ class Task:
         if not self.estimate:
             return None
         return self.estimate - self.time_spent
+
+    # Team collaboration helper methods
+    def is_blocked(self) -> bool:
+        """Check if task is blocked by other tasks"""
+        return len(self.blocked_by) > 0
+
+    def set_blocked_by(self, task_ids: List[int]):
+        """Set which tasks block this one"""
+        self.blocked_by = task_ids
+        if task_ids:
+            self.status = 'blocked'
+
+    def add_blocker(self, task_id: int):
+        """Add a task that blocks this one"""
+        if task_id not in self.blocked_by and task_id != self.id:
+            self.blocked_by.append(task_id)
+            self.status = 'blocked'
+
+    def remove_blocker(self, task_id: int):
+        """Remove a blocking task"""
+        if task_id in self.blocked_by:
+            self.blocked_by.remove(task_id)
+            if not self.blocked_by and self.status == 'blocked':
+                self.status = 'todo'
+
+    def is_overdue(self) -> bool:
+        """Check if task is past its due date and not completed"""
+        if not self.due_at or self.completed:
+            return False
+        try:
+            due_date = datetime.fromisoformat(self.due_at).date()
+            today = datetime.now().date()
+            return due_date < today
+        except (ValueError, TypeError):
+            return False
+
+    def is_due_soon(self, days: int = 1) -> bool:
+        """Check if task is due within N days (default: 1 day)"""
+        if not self.due_at or self.completed:
+            return False
+        try:
+            due_date = datetime.fromisoformat(self.due_at).date()
+            today = datetime.now().date()
+            soon_date = today + timedelta(days=days)
+            return today <= due_date <= soon_date
+        except (ValueError, TypeError):
+            return False
+
+    def needs_handoff(self) -> bool:
+        """Check if task needs handoff note (blocked but no note, or due soon without note)"""
+        if self.completed:
+            return False
+        # Blocked tasks should have handoff notes
+        if self.is_blocked() and not self.handoff_note:
+            return True
+        # Cross-person collaboration needs reviewer
+        if self.owner and not self.reviewer and self.status == 'review':
+            return True
+        return False
+
+    def has_owner(self) -> bool:
+        """Check if task has an owner assigned"""
+        return self.owner is not None and self.owner.strip() != ""
+
+    def has_reviewer(self) -> bool:
+        """Check if task has a reviewer assigned"""
+        return self.reviewer is not None and self.reviewer.strip() != ""
+
+    def is_incident_task(self) -> bool:
+        """Check if this is an incident task"""
+        return self.incident
+
+    def set_status(self, new_status: str):
+        """Set task status with validation"""
+        if new_status not in STATUS_CHOICES:
+            raise ValueError(f"Invalid status. Must be one of: {STATUS_CHOICES}")
+        # If marking as done, also mark completed
+        if new_status == 'done' and not self.completed:
+            self.mark_done()
+        else:
+            self.status = new_status
+            # If reactivating a done task
+            if self.completed and new_status != 'done':
+                self.completed = False
+                self.completed_at = None
+
+    def get_status_color(self) -> str:
+        """Get Rich color for status display"""
+        status_colors = {
+            'todo': 'dim',
+            'in_progress': 'cyan',
+            'review': 'yellow',
+            'blocked': 'red',
+            'done': 'green',
+        }
+        return status_colors.get(self.status, 'dim')
+
+    def get_due_date_display(self) -> str:
+        """Get formatted due date with status indicator"""
+        if not self.due_at:
+            return "-"
+        try:
+            due = datetime.fromisoformat(self.due_at)
+            due_str = due.strftime('%Y-%m-%d')
+            if self.is_overdue():
+                return f"[red]OVERDUE: {due_str}[/red]"
+            elif self.is_due_soon():
+                return f"[yellow]Soon: {due_str}[/yellow]"
+            return due_str
+        except (ValueError, TypeError):
+            return str(self.due_at)
