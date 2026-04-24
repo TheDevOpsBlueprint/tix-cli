@@ -11,10 +11,11 @@ from tix.storage.json_storage import TaskStorage
 # from tix.storage.context_storage import ContextStorage
 from tix.storage.history import HistoryManager
 from tix.storage.backup import create_backup, list_backups, restore_from_backup
-from tix.models import Task
+from tix.models import Task, STATUS_CHOICES
 from rich.prompt import Prompt
 from rich.markdown import Markdown
 from datetime import datetime
+from typing import List
 # from .storage import storage
 # from .config import CONFIG
 # from .context import context_storage
@@ -41,6 +42,59 @@ def parse_time_estimate(time_str: str) -> int:
         total_minutes = int(time_str)
     
     return total_minutes
+
+
+def parse_due_date(date_str: str) -> str:
+    """Parse due date string into ISO format.
+    Supports: '2026-04-23', 'today', 'tomorrow', 'next-week', 'in-3-days'
+    """
+    from datetime import datetime, timedelta
+    
+    date_str = date_str.lower().strip()
+    today = datetime.now().date()
+    
+    if date_str == 'today':
+        return datetime.combine(today, datetime.min.time()).isoformat()
+    elif date_str == 'tomorrow':
+        return datetime.combine(today + timedelta(days=1), datetime.min.time()).isoformat()
+    elif date_str == 'next-week' or date_str == 'nextweek':
+        return datetime.combine(today + timedelta(days=7), datetime.min.time()).isoformat()
+    elif date_str.startswith('in-') and date_str.endswith('-days'):
+        try:
+            days = int(date_str.split('-')[1])
+            return datetime.combine(today + timedelta(days=days), datetime.min.time()).isoformat()
+        except (ValueError, IndexError):
+            pass
+    else:
+        # Try parsing as ISO date
+        try:
+            parsed = datetime.strptime(date_str, '%Y-%m-%d')
+            return parsed.isoformat()
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(date_str)
+            return parsed.isoformat()
+        except ValueError:
+            pass
+    
+    raise ValueError(f"Invalid date format: {date_str}. Use YYYY-MM-DD, 'today', 'tomorrow', 'in-N-days'")
+
+
+def parse_blocked_by(blocked_by_str: str) -> List[int]:
+    """Parse blocked-by string like '1,2,3' into list of integers"""
+    if not blocked_by_str:
+        return []
+    parts = blocked_by_str.split(',')
+    result = []
+    for p in parts:
+        p = p.strip()
+        if p:
+            try:
+                result.append(int(p))
+            except ValueError:
+                raise ValueError(f"Invalid task ID: {p}")
+    return result
 
 
 def format_time_helper(minutes: int) -> str:
@@ -180,20 +234,50 @@ def restore(backup_file, data_file, yes):
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
 @click.option('--estimate', '-e', help='Time estimate (e.g., 2h, 30m, 1h30m)')
-def add(task, priority, tag, attach, link, estimate):
-    """Add a new task"""
+# Team collaboration options
+@click.option('--owner', '-o', help='Assign owner to task')
+@click.option('--reviewer', '-r', help='Assign reviewer to task')
+@click.option('--status', '-s', default='todo',
+              type=click.Choice(STATUS_CHOICES),
+              help='Set task status')
+@click.option('--due', '-d', 'due_at', help='Due date (YYYY-MM-DD, today, tomorrow, in-N-days)')
+@click.option('--handoff', '-n', 'handoff_note', help='Add handoff note for task')
+@click.option('--blocked-by', '-b', help='Tasks blocking this one (comma-separated IDs: 1,2,3)')
+@click.option('--incident', '-i', is_flag=True, help='Mark as incident task')
+def add(task, priority, tag, attach, link, estimate,
+        owner, reviewer, status, due_at, handoff_note, blocked_by, incident):
+    """Add a new task (with team collaboration support)"""
     from tix.config import CONFIG
 
     if not task or not task.strip():
         console.print("[red]✗[/red] Task text cannot be empty")
         sys.exit(1)
 
+    # Parse time estimate
     estimate_minutes = None
     if estimate:
         try:
             estimate_minutes = parse_time_estimate(estimate)
         except ValueError:
             console.print("[red]✗[/red] Invalid time format. Use format like: 2h, 30m, 1h30m")
+            return
+
+    # Parse due date
+    parsed_due_at = None
+    if due_at:
+        try:
+            parsed_due_at = parse_due_date(due_at)
+        except ValueError as e:
+            console.print(f"[red]✗[/red] {str(e)}")
+            return
+
+    # Parse blocked-by
+    parsed_blocked_by = []
+    if blocked_by:
+        try:
+            parsed_blocked_by = parse_blocked_by(blocked_by)
+        except ValueError as e:
+            console.print(f"[red]✗[/red] {str(e)}")
             return
 
     # Use config defaults if not specified
@@ -204,7 +288,21 @@ def add(task, priority, tag, attach, link, estimate):
     default_tags = CONFIG.get('defaults', {}).get('tags', [])
     all_tags = list(set(list(tag) + default_tags))
     
-    new_task = storage.add_task(task, priority, all_tags, estimate=estimate_minutes)
+    # Create task with all team collaboration fields
+    new_task = storage.add_task(
+        task, 
+        priority, 
+        all_tags, 
+        estimate=estimate_minutes,
+        owner=owner,
+        reviewer=reviewer,
+        status=status,
+        due_at=parsed_due_at,
+        handoff_note=handoff_note,
+        blocked_by=parsed_blocked_by,
+        incident=incident,
+    )
+    
     # Handle attachments
     if attach:
         attachment_dir = Path.home() / ".tix" / "attachments" / str(new_task.id)
@@ -230,6 +328,7 @@ def add(task, priority, tag, attach, link, estimate):
     storage.update_task(new_task, record_history=False)
 
     color = {'high': 'red', 'medium': 'yellow', 'low': 'green'}[priority]
+    status_color = new_task.get_status_color()
     console.print(f"[green]✔[/green] Added task #{new_task.id}: [{color}]{task}[/{color}]")
     
     # Show notification if enabled
@@ -241,18 +340,96 @@ def add(task, priority, tag, attach, link, estimate):
             console.print(f"[dim]  Attachments/Links added[/dim]")
         if estimate:
             console.print(f"[dim]  Estimated time: {new_task.format_time(estimate_minutes)}[/dim]")
+        # Show team collaboration fields
+        if owner:
+            console.print(f"[dim]  Owner: {owner}[/dim]")
+        if reviewer:
+            console.print(f"[dim]  Reviewer: {reviewer}[/dim]")
+        if status != 'todo':
+            console.print(f"[dim]  Status: [{status_color}]{status}[/{status_color}][/dim]")
+        if due_at:
+            console.print(f"[dim]  Due: {new_task.get_due_date_display()}[/dim]")
+        if handoff_note:
+            console.print(f"[dim]  Handoff note: {handoff_note[:50]}{'...' if len(handoff_note) > 50 else ''}[/dim]")
+        if parsed_blocked_by:
+            console.print(f"[dim]  Blocked by: #{', #'.join(map(str, parsed_blocked_by))}[/dim]")
+        if incident:
+            console.print(f"[red]  ⚠ INCIDENT TASK[/red]")
 
 
 @cli.command()
 @click.option("--all", "-a", "show_all", is_flag=True, help="Show completed tasks too")
-def ls(show_all):
-    """List all tasks"""
+@click.option("--owner", "-o", help="Filter by owner (use 'none' for unassigned)")
+@click.option("--reviewer", "-r", help="Filter by reviewer (use 'none' for no reviewer)")
+@click.option("--status", "-s", type=click.Choice(STATUS_CHOICES), help="Filter by task status")
+@click.option("--blocked", "-b", is_flag=True, help="Show only blocked tasks")
+@click.option("--incident", "-i", is_flag=True, help="Show only incident tasks")
+@click.option("--overdue", is_flag=True, help="Show only overdue tasks")
+@click.option("--due-soon", is_flag=True, help="Show only tasks due soon (today/tomorrow)")
+@click.option("--no-handoff", is_flag=True, help="Show only tasks needing handoff notes")
+@click.option("--detailed", "-d", is_flag=True, help="Show detailed view with owner, status, due date")
+@click.option("--priority", "-p", type=click.Choice(['low', 'medium', 'high']), help="Filter by priority")
+@click.option("--tag", "-t", help="Filter by tag")
+def ls(show_all, owner, reviewer, status, blocked, incident, overdue, 
+       due_soon, no_handoff, detailed, priority, tag):
+    """List tasks with team collaboration filters and display"""
     from tix.config import CONFIG
 
-    tasks = storage.load_tasks() if show_all else storage.get_active_tasks()
+    # Load all tasks first
+    tasks = storage.load_tasks()
+
+    # Apply basic completion filter
+    if not show_all:
+        tasks = [t for t in tasks if not t.completed]
+
+    # Apply owner filter
+    if owner is not None:
+        if owner.lower() == 'none':
+            tasks = [t for t in tasks if not t.has_owner()]
+        else:
+            tasks = [t for t in tasks if t.owner and t.owner.lower() == owner.lower()]
+
+    # Apply reviewer filter
+    if reviewer is not None:
+        if reviewer.lower() == 'none':
+            tasks = [t for t in tasks if not t.has_reviewer()]
+        else:
+            tasks = [t for t in tasks if t.reviewer and t.reviewer.lower() == reviewer.lower()]
+
+    # Apply status filter
+    if status:
+        tasks = [t for t in tasks if t.status == status]
+
+    # Apply blocked filter
+    if blocked:
+        tasks = [t for t in tasks if t.is_blocked()]
+
+    # Apply incident filter
+    if incident:
+        tasks = [t for t in tasks if t.is_incident_task()]
+
+    # Apply overdue filter
+    if overdue:
+        tasks = [t for t in tasks if t.is_overdue()]
+
+    # Apply due-soon filter
+    if due_soon:
+        tasks = [t for t in tasks if t.is_due_soon(days=2)]
+
+    # Apply no-handoff filter
+    if no_handoff:
+        tasks = [t for t in tasks if t.needs_handoff()]
+
+    # Apply priority filter
+    if priority:
+        tasks = [t for t in tasks if t.priority == priority]
+
+    # Apply tag filter
+    if tag:
+        tasks = [t for t in tasks if tag in t.tags]
 
     if not tasks:
-        console.print("[dim]No tasks found. Use 'tix add' to create one![/dim]")
+        console.print("[dim]No tasks found matching your criteria[/dim]")
         return
 
     # Get display settings from config
@@ -264,15 +441,22 @@ def ls(show_all):
 
     # color settings
     priority_colors = CONFIG.get('colors', {}).get('priority', {})
-    status_colors = CONFIG.get('colors', {}).get('status', {})
     tag_color = CONFIG.get('colors', {}).get('tags', 'cyan')
 
-    title = "All Tasks" if show_all else "Tasks"
+    title = "Tasks"
+    if show_all:
+        title = "All Tasks"
+    
+    # Build table
     table = Table(title=title)
     if show_ids:
         table.add_column("ID", style="cyan", width=4)
     table.add_column("✔", width=3)
-    table.add_column("Priority", width=8)
+    table.add_column("Pri", width=4)
+    if detailed:
+        table.add_column("Status", width=12)
+        table.add_column("Owner", width=10)
+        table.add_column("Due", width=16)
     table.add_column("Task")
     if not compact_mode:
         table.add_column("Tags", style=tag_color)
@@ -280,34 +464,78 @@ def ls(show_all):
         table.add_column("Created", style="dim")
 
     count = dict()
+    owner_counts = {}
+    status_counts = {}
 
-    for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
-        status = "✔" if getattr(task, "completed", False) else "○"
-        priority_color = priority_colors.get(getattr(task, "priority", "medium"),
-                                            {'high': 'red', 'medium': 'yellow', 'low': 'green'}[getattr(task, "priority", "medium")])
-        tags_str = ", ".join(getattr(task, "tags", [])) if getattr(task, "tags", None) else ""
+    # Sort tasks: incidents first, then by priority (high first), then by status (blocked first)
+    def sort_key(t):
+        priority_order = {'high': 0, 'medium': 1, 'low': 2}
+        status_order = {'blocked': 0, 'in_progress': 1, 'review': 2, 'todo': 3, 'done': 4}
+        return (
+            not t.incident,
+            priority_order.get(t.priority, 1),
+            status_order.get(t.status, 3),
+            t.is_overdue(),
+            t.id
+        )
 
-        attach_icon = " 📎" if getattr(task, "attachments", None) or getattr(task, "links", None) else ""
+    for task in sorted(tasks, key=sort_key):
+        check_status = "✔" if task.completed else "○"
+        priority_color = priority_colors.get(task.priority,
+                                            {'high': 'red', 'medium': 'yellow', 'low': 'green'}[task.priority])
+        tags_str = ", ".join(task.tags) if task.tags else ""
+
+        # Icons for special tasks
+        icons = []
+        if task.incident:
+            icons.append("🔴")
+        if task.is_blocked():
+            icons.append("🚫")
+        if task.is_overdue():
+            icons.append("⏰")
+        if task.needs_handoff():
+            icons.append("📋")
+        icon_str = " " + " ".join(icons) if icons else ""
+
+        # Attachment icon
+        attach_icon = " 📎" if task.attachments or task.links else ""
 
         # text truncation
-        text_val = getattr(task, "text", getattr(task, "task", ""))
+        text_val = task.text
         if max_text_length and max_text_length > 0 and len(text_val) > max_text_length:
             text_val = text_val[: max_text_length - 3] + "..."
 
-        task_style = "dim strike" if getattr(task, "completed", False) else ""
+        task_style = "dim strike" if task.completed else ""
         row = []
         if show_ids:
-            row.append(str(getattr(task, "id", "")))
-        row.append(status)
-        row.append(f"[{priority_color}]{getattr(task, 'priority', '')}[/{priority_color}]")
-        if getattr(task, "completed", False):
-            row.append(f"[{task_style}]{text_val}[/{task_style}]{attach_icon}")
+            row.append(str(task.id))
+        row.append(check_status)
+        row.append(f"[{priority_color}]{task.priority[:3]}[/{priority_color}]")
+        
+        if detailed:
+            # Status with color
+            status_color = task.get_status_color()
+            status_display = task.status.replace('_', '-')
+            row.append(f"[{status_color}]{status_display}[/{status_color}]")
+            
+            # Owner
+            owner_display = task.owner or "-"
+            row.append(owner_display if len(owner_display) <= 10 else owner_display[:10])
+            
+            # Due date
+            row.append(task.get_due_date_display())
+        
+        # Task text
+        if task.completed:
+            row.append(f"[{task_style}]{text_val}[/{task_style}]{icon_str}{attach_icon}")
         else:
-            row.append(f"{text_val}{attach_icon}")
+            row.append(f"{text_val}{icon_str}{attach_icon}")
+        
         if not compact_mode:
             row.append(tags_str)
+        
         if show_dates:
-            created = getattr(task, "created", getattr(task, "created_at", None))
+            created = task.created_at
             if created:
                 try:
                     created_date = datetime.fromisoformat(created).strftime('%Y-%m-%d')
@@ -316,20 +544,42 @@ def ls(show_all):
                     row.append("")
             else:
                 row.append("")
+        
         table.add_row(*row)
-        count[getattr(task, "completed", False)] = count.get(getattr(task, "completed", False), 0) + 1
+        
+        # Count for summary
+        count[task.completed] = count.get(task.completed, 0) + 1
+        
+        # Owner counts
+        if task.owner:
+            owner_counts[task.owner] = owner_counts.get(task.owner, 0) + 1
+        else:
+            owner_counts['(unassigned)'] = owner_counts.get('(unassigned)', 0) + 1
+        
+        # Status counts
+        status_counts[task.status] = status_counts.get(task.status, 0) + 1
 
     console.print(table)
+    
+    # Summary
     if not compact_mode:
         console.print("\n")
-    console.print(f"[cyan]Total tasks:{sum(count.values())}")
-    console.print(f"[cyan]Active tasks:{count.get(False, 0)}")
-    console.print(f"[green]Completed tasks:{count.get(True, 0)}")
-
-    if show_all:
-        active = len([t for t in tasks if not getattr(t, "completed", False)])
-        completed = len([t for t in tasks if getattr(t, "completed", False)])
-        console.print(f"\n[dim]Total: {len(tasks)} | Active: {active} | Completed: {completed}[/dim]")
+    
+    console.print(f"[cyan]Total: {sum(count.values())}[/cyan]")
+    console.print(f"[cyan]Active: {count.get(False, 0)}[/cyan]")
+    console.print(f"[green]Completed: {count.get(True, 0)}[/green]")
+    
+    # Owner breakdown in detailed mode
+    if detailed and owner_counts:
+        console.print("\n[bold]By Owner:[/bold]")
+        for owner_name, cnt in sorted(owner_counts.items(), key=lambda x: (-x[1], x[0])):
+            console.print(f"  • {owner_name}: {cnt} task{'s' if cnt != 1 else ''}")
+    
+    # Status breakdown
+    if status_counts:
+        console.print("\n[bold]By Status:[/bold]")
+        for status_name, cnt in sorted(status_counts.items()):
+            console.print(f"  • {status_name}: {cnt}")
 
 
 @cli.command()
@@ -468,14 +718,26 @@ def clear(completed, force):
 @click.option('--remove-tag', multiple=True, help='Remove tags')
 @click.option('--attach', '-f', multiple=True, help='Attach file(s)')
 @click.option('--link', '-l', multiple=True, help='Attach URL(s)')
-def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
-    """Edit a task"""
+# Team collaboration edit options
+@click.option('--owner', '-o', help='Set/change owner (use "none" to clear)')
+@click.option('--reviewer', '-r', help='Set/change reviewer (use "none" to clear)')
+@click.option('--status', '-s', type=click.Choice(STATUS_CHOICES), help='Set task status')
+@click.option('--due', '-d', 'due_at', help='Set due date (YYYY-MM-DD, today, tomorrow; use "none" to clear)')
+@click.option('--handoff', '-n', 'handoff_note', help='Set handoff note (use "none" to clear)')
+@click.option('--add-blocker', 'add_blocker', multiple=True, type=int, help='Add a blocking task ID')
+@click.option('--remove-blocker', 'remove_blocker', multiple=True, type=int, help='Remove a blocking task ID')
+@click.option('--incident/--no-incident', default=None, help='Mark/unmark as incident task')
+def edit(task_id, text, priority, add_tag, remove_tag, attach, link,
+         owner, reviewer, status, due_at, handoff_note, add_blocker, remove_blocker, incident):
+    """Edit a task (with team collaboration fields)"""
     task = storage.get_task(task_id)
     if not task:
         console.print(f"[red]✗[/red] Task #{task_id} not found")
         return
 
     changes = []
+    
+    # Basic fields
     if text:
         old = getattr(task, "text", getattr(task, "task", ""))
         task.text = text
@@ -495,6 +757,7 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
             task.tags.remove(tag)
             changes.append(f"-tag: '{tag}'")
 
+    # Attachments
     if attach:
         attachment_dir = Path.home() / ".tix" / "attachments" / str(task.id)
         attachment_dir.mkdir(parents=True, exist_ok=True)
@@ -513,11 +776,76 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link):
                 console.print(f"[red]✗[/red] Failed to attach {file_path}: {e}")
         changes.append(f"attachments added: {[Path(f).name for f in attach]}")
 
+    # Links
     if link:
         if not hasattr(task, "links"):
             task.links = []
         task.links.extend(link)
         changes.append(f"links added: {list(link)}")
+
+    # Team collaboration fields
+    if owner is not None:
+        old_owner = task.owner or "(none)"
+        if owner.lower() == 'none':
+            task.owner = None
+            changes.append(f"owner: {old_owner} → (cleared)")
+        else:
+            task.owner = owner
+            changes.append(f"owner: {old_owner} → {owner}")
+    
+    if reviewer is not None:
+        old_reviewer = task.reviewer or "(none)"
+        if reviewer.lower() == 'none':
+            task.reviewer = None
+            changes.append(f"reviewer: {old_reviewer} → (cleared)")
+        else:
+            task.reviewer = reviewer
+            changes.append(f"reviewer: {old_reviewer} → {reviewer}")
+    
+    if status is not None:
+        old_status = task.status
+        task.set_status(status)
+        changes.append(f"status: {old_status} → {status}")
+    
+    if due_at is not None:
+        old_due = task.due_at or "(none)"
+        if due_at.lower() == 'none':
+            task.due_at = None
+            changes.append(f"due date: {old_due} → (cleared)")
+        else:
+            try:
+                parsed = parse_due_date(due_at)
+                task.due_at = parsed
+                changes.append(f"due date: {old_due} → {due_at}")
+            except ValueError as e:
+                console.print(f"[red]✗[/red] {str(e)}")
+                return
+    
+    if handoff_note is not None:
+        old_note = task.handoff_note or "(none)"
+        if handoff_note.lower() == 'none':
+            task.handoff_note = None
+            changes.append(f"handoff note: (cleared)")
+        else:
+            task.handoff_note = handoff_note
+            changes.append(f"handoff note updated")
+    
+    # Blockers
+    for blocker_id in add_blocker:
+        if blocker_id != task.id and blocker_id not in task.blocked_by:
+            task.add_blocker(blocker_id)
+            changes.append(f"+blocker: #{blocker_id}")
+    
+    for blocker_id in remove_blocker:
+        if blocker_id in task.blocked_by:
+            task.remove_blocker(blocker_id)
+            changes.append(f"-blocker: #{blocker_id}")
+    
+    # Incident flag
+    if incident is not None:
+        old_incident = task.incident
+        task.incident = incident
+        changes.append(f"incident: {old_incident} → {incident}")
 
     if changes:
         storage.update_task(task)
@@ -781,8 +1109,20 @@ def filter():
 @click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
 @click.option("--tag", "-t", help="Filter by tag")
 @click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
-@click.option("--saved", "-s", "saved_name", help="Apply a saved filter by name")
-def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optional[bool], saved_name: Optional[str]):
+@click.option("--owner", "-o", help="Filter by owner (use 'none' for unassigned)")
+@click.option("--reviewer", "-r", help="Filter by reviewer (use 'none' for no reviewer)")
+@click.option("--status", "-s", type=click.Choice(STATUS_CHOICES), help="Filter by task status")
+@click.option("--blocked", "-b", is_flag=True, help="Show only blocked tasks")
+@click.option("--incident", "-i", is_flag=True, help="Show only incident tasks")
+@click.option("--overdue", is_flag=True, help="Show only overdue tasks")
+@click.option("--due-soon", is_flag=True, help="Show only tasks due soon")
+@click.option("--no-handoff", is_flag=True, help="Show only tasks needing handoff notes")
+@click.option("--detailed", "-d", is_flag=True, help="Show detailed view")
+@click.option("--saved", "-S", "saved_name", help="Apply a saved filter by name (uppercase -S)")
+def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optional[bool],
+                 owner: Optional[str], reviewer: Optional[str], status: Optional[str],
+                 blocked: bool, incident: bool, overdue: bool, due_soon: bool, 
+                 no_handoff: bool, detailed: bool, saved_name: Optional[str]):
     """
     Apply a filter (immediately). Use --saved <name> to apply saved filters.
     If --saved is provided, any inline options are ignored (saved filter takes precedence).
@@ -796,19 +1136,58 @@ def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optiona
         priority = saved.get("priority")
         tag = saved.get("tag")
         completed = saved.get("completed")
+        owner = saved.get("owner")
+        reviewer = saved.get("reviewer")
+        status = saved.get("status")
+        blocked = saved.get("blocked", False)
+        incident = saved.get("incident", False)
+        overdue = saved.get("overdue", False)
+        due_soon = saved.get("due_soon", False)
+        no_handoff = saved.get("no_handoff", False)
 
-    # Now perform filtering (same UX as previous 'filter' command)
+    # Now perform filtering
     tasks = storage.load_tasks() if hasattr(storage, "load_tasks") else []
 
     # completion filter: None = all, True = completed, False = active
     if completed is not None:
-        tasks = [t for t in tasks if getattr(t, "completed", False) == completed]
+        tasks = [t for t in tasks if t.completed == completed]
 
     if priority:
-        tasks = [t for t in tasks if getattr(t, "priority", None) == priority]
+        tasks = [t for t in tasks if t.priority == priority]
 
     if tag:
-        tasks = [t for t in tasks if tag in getattr(t, "tags", [])]
+        tasks = [t for t in tasks if tag in t.tags]
+    
+    # Team collaboration filters
+    if owner is not None:
+        if owner.lower() == 'none':
+            tasks = [t for t in tasks if not t.has_owner()]
+        else:
+            tasks = [t for t in tasks if t.owner and t.owner.lower() == owner.lower()]
+    
+    if reviewer is not None:
+        if reviewer.lower() == 'none':
+            tasks = [t for t in tasks if not t.has_reviewer()]
+        else:
+            tasks = [t for t in tasks if t.reviewer and t.reviewer.lower() == reviewer.lower()]
+    
+    if status:
+        tasks = [t for t in tasks if t.status == status]
+    
+    if blocked:
+        tasks = [t for t in tasks if t.is_blocked()]
+    
+    if incident:
+        tasks = [t for t in tasks if t.is_incident_task()]
+    
+    if overdue:
+        tasks = [t for t in tasks if t.is_overdue()]
+    
+    if due_soon:
+        tasks = [t for t in tasks if t.is_due_soon(days=2)]
+    
+    if no_handoff:
+        tasks = [t for t in tasks if t.needs_handoff()]
 
     if not tasks:
         console.print("[dim]No matching tasks[/dim]")
@@ -822,27 +1201,99 @@ def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optiona
         filters_desc.append(f"tag='{tag}'")
     if completed is not None:
         filters_desc.append("completed" if completed else "active")
+    if owner:
+        filters_desc.append(f"owner={owner}")
+    if reviewer:
+        filters_desc.append(f"reviewer={reviewer}")
+    if status:
+        filters_desc.append(f"status={status}")
+    if blocked:
+        filters_desc.append("blocked")
+    if incident:
+        filters_desc.append("incident")
+    if overdue:
+        filters_desc.append("overdue")
+    if due_soon:
+        filters_desc.append("due-soon")
+    if no_handoff:
+        filters_desc.append("needs-handoff")
+    
     filter_desc = " AND ".join(filters_desc) if filters_desc else "all"
     console.print(f"[bold]{len(tasks)} task(s) matching [{filter_desc}]:[/bold]\n")
 
-    table = Table()
-    table.add_column("ID", style="cyan", width=4)
-    table.add_column("✔", width=3)
-    table.add_column("Priority", width=8)
-    table.add_column("Task")
-    table.add_column("Tags", style="dim")
+    # Build table based on detailed mode
+    if detailed:
+        table = Table()
+        table.add_column("ID", style="cyan", width=4)
+        table.add_column("✔", width=3)
+        table.add_column("Pri", width=4)
+        table.add_column("Status", width=12)
+        table.add_column("Owner", width=10)
+        table.add_column("Due", width=16)
+        table.add_column("Task")
+        table.add_column("Tags", style="dim")
 
-    for task in sorted(tasks, key=lambda t: (getattr(t, "completed", False), getattr(t, "id", 0))):
-        status = "✔" if getattr(task, "completed", False) else "○"
-        priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(getattr(task, "priority", "medium"), "yellow")
-        tags_str = ", ".join(getattr(task, "tags", [])) if getattr(task, "tags", None) else ""
-        table.add_row(
-            str(getattr(task, "id", "")),
-            status,
-            f"[{priority_color}]{getattr(task, 'priority', '')}[/{priority_color}]",
-            getattr(task, "text", getattr(task, "task", "")),
-            tags_str,
-        )
+        for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
+            check_status = "✔" if task.completed else "○"
+            priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(task.priority, "yellow")
+            tags_str = ", ".join(task.tags) if task.tags else ""
+            status_color = task.get_status_color()
+            status_display = task.status.replace('_', '-')
+            
+            # Icons for special tasks
+            icons = []
+            if task.incident:
+                icons.append("🔴")
+            if task.is_blocked():
+                icons.append("🚫")
+            if task.is_overdue():
+                icons.append("⏰")
+            if task.needs_handoff():
+                icons.append("📋")
+            icon_str = " " + " ".join(icons) if icons else ""
+            
+            table.add_row(
+                str(task.id),
+                check_status,
+                f"[{priority_color}]{task.priority[:3]}[/{priority_color}]",
+                f"[{status_color}]{status_display}[/{status_color}]",
+                task.owner or "-",
+                task.get_due_date_display(),
+                f"{task.text}{icon_str}",
+                tags_str,
+            )
+    else:
+        table = Table()
+        table.add_column("ID", style="cyan", width=4)
+        table.add_column("✔", width=3)
+        table.add_column("Priority", width=8)
+        table.add_column("Task")
+        table.add_column("Tags", style="dim")
+
+        for task in sorted(tasks, key=lambda t: (t.completed, t.id)):
+            check_status = "✔" if task.completed else "○"
+            priority_color = {"high": "red", "medium": "yellow", "low": "green"}.get(task.priority, "yellow")
+            tags_str = ", ".join(task.tags) if task.tags else ""
+            
+            # Icons for special tasks
+            icons = []
+            if task.incident:
+                icons.append("🔴")
+            if task.is_blocked():
+                icons.append("🚫")
+            if task.is_overdue():
+                icons.append("⏰")
+            if task.needs_handoff():
+                icons.append("📋")
+            icon_str = " " + " ".join(icons) if icons else ""
+            
+            table.add_row(
+                str(task.id),
+                check_status,
+                f"[{priority_color}]{task.priority}[/{priority_color}]",
+                f"{task.text}{icon_str}",
+                tags_str,
+            )
 
     console.print(table)
 
@@ -852,11 +1303,22 @@ def filter_apply(priority: Optional[str], tag: Optional[str], completed: Optiona
 @click.option("--priority", "-p", type=click.Choice(["low", "medium", "high"]), help="Filter by priority")
 @click.option("--tag", "-t", help="Filter by tag")
 @click.option("--completed/--active", "-c/-a", default=None, help="Filter by completion status")
+@click.option("--owner", "-o", help="Filter by owner (use 'none' for unassigned)")
+@click.option("--reviewer", "-r", help="Filter by reviewer (use 'none' for no reviewer)")
+@click.option("--status", "-s", type=click.Choice(STATUS_CHOICES), help="Filter by task status")
+@click.option("--blocked", "-b", is_flag=True, help="Filter by blocked")
+@click.option("--incident", "-i", is_flag=True, help="Filter by incident")
+@click.option("--overdue", is_flag=True, help="Filter by overdue")
+@click.option("--due-soon", is_flag=True, help="Filter by due-soon")
+@click.option("--no-handoff", is_flag=True, help="Filter by no-handoff")
 @click.option("--force", "-f", is_flag=True, help="Overwrite existing saved filter of same name")
-def filter_save(name: str, priority: Optional[str], tag: Optional[str], completed: Optional[bool], force: bool):
+def filter_save(name: str, priority: Optional[str], tag: Optional[str], completed: Optional[bool],
+                owner: Optional[str], reviewer: Optional[str], status: Optional[str],
+                blocked: bool, incident: bool, overdue: bool, due_soon: bool, 
+                no_handoff: bool, force: bool):
     """
     Save a filter under <name>. Later you can apply it with `tix filter apply --saved <name>`.
-    Example: tix filter save work -t work -p high
+    Example: tix filter save oncall -o alice --incident
     """
     filters = _load_saved_filters()
     if name in filters and not force:
@@ -866,7 +1328,14 @@ def filter_save(name: str, priority: Optional[str], tag: Optional[str], complete
     storage_obj = {
         "priority": priority,
         "tag": tag,
-        # store completed as True/False/null
+        "owner": owner,
+        "reviewer": reviewer,
+        "status": status,
+        "blocked": blocked if blocked else None,
+        "incident": incident if incident else None,
+        "overdue": overdue if overdue else None,
+        "due_soon": due_soon if due_soon else None,
+        "no_handoff": no_handoff if no_handoff else None,
         "completed": None if completed is None else (True if completed else False),
         "saved_at": datetime.now().isoformat()
     }
@@ -882,6 +1351,22 @@ def filter_save(name: str, priority: Optional[str], tag: Optional[str], complete
             parts.append(f"-p {storage_obj['priority']}")
         if "tag" in storage_obj:
             parts.append(f"-t {storage_obj['tag']}")
+        if "owner" in storage_obj:
+            parts.append(f"-o {storage_obj['owner']}")
+        if "reviewer" in storage_obj:
+            parts.append(f"-r {storage_obj['reviewer']}")
+        if "status" in storage_obj:
+            parts.append(f"-s {storage_obj['status']}")
+        if storage_obj.get("blocked"):
+            parts.append("-b")
+        if storage_obj.get("incident"):
+            parts.append("-i")
+        if storage_obj.get("overdue"):
+            parts.append("--overdue")
+        if storage_obj.get("due_soon"):
+            parts.append("--due-soon")
+        if storage_obj.get("no_handoff"):
+            parts.append("--no-handoff")
         if "completed" in storage_obj:
             parts.append("--completed" if storage_obj["completed"] else "--active")
         if parts:
@@ -909,6 +1394,22 @@ def filter_list():
             parts.append(f"priority={obj['priority']}")
         if "tag" in obj:
             parts.append(f"tag='{obj['tag']}'")
+        if "owner" in obj:
+            parts.append(f"owner={obj['owner']}")
+        if "reviewer" in obj:
+            parts.append(f"reviewer={obj['reviewer']}")
+        if "status" in obj:
+            parts.append(f"status={obj['status']}")
+        if obj.get("blocked"):
+            parts.append("blocked")
+        if obj.get("incident"):
+            parts.append("incident")
+        if obj.get("overdue"):
+            parts.append("overdue")
+        if obj.get("due_soon"):
+            parts.append("due-soon")
+        if obj.get("no_handoff"):
+            parts.append("needs-handoff")
         if "completed" in obj:
             parts.append("completed" if obj["completed"] else "active")
         filter_desc = " AND ".join(parts) if parts else "all"
@@ -1375,6 +1876,504 @@ def timereport(period):
     if total_estimated > 0:
         efficiency = (total_estimated / max(total_spent, 1)) * 100
         console.print(f"  Efficiency: {efficiency:.1f}%")
+
+
+def _format_task_for_list(task: Task, show_owner: bool = True) -> str:
+    """Format a task for display in handoff view"""
+    icons = []
+    if task.incident:
+        icons.append("🔴")
+    if task.is_blocked():
+        icons.append("🚫")
+    if task.is_overdue():
+        icons.append("⏰")
+    icon_str = " " + " ".join(icons) if icons else ""
+    
+    owner_str = f" [owner: {task.owner}]" if show_owner and task.owner else ""
+    return f"#{task.id}: {task.text}{icon_str}{owner_str}"
+
+
+@cli.command()
+@click.option("--format", "-f", type=click.Choice(['console', 'markdown']), default='console', help='Output format')
+@click.option("--output", "-o", type=click.Path(), help='Output to file (for markdown format)')
+def handoff(format, output):
+    """Handoff view - show tasks needing attention for shift交接
+    
+    Shows:
+    - Tasks due today that must be handed off
+    - Unassigned high-priority tasks
+    - Blocked tasks without handoff notes
+    - Cross-person tasks missing reviewers
+    - Overdue incomplete tasks
+    """
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    
+    tasks = storage.load_tasks()
+    today = datetime.now().date()
+    
+    # Category 1: Tasks due today that need handoff (active, due today, with owner)
+    due_today = []
+    # Category 2: Unassigned high priority tasks
+    unassigned_high = []
+    # Category 3: Blocked tasks without handoff notes
+    blocked_no_note = []
+    # Category 4: Tasks needing review (status=review but no reviewer)
+    needs_reviewer = []
+    # Category 5: Overdue incomplete tasks
+    overdue_incomplete = []
+    
+    for task in tasks:
+        if task.completed:
+            continue
+        
+        # Category 1: Due today with owner
+        if task.due_at:
+            try:
+                due_date = datetime.fromisoformat(task.due_at).date()
+                if due_date == today and task.owner:
+                    due_today.append(task)
+            except (ValueError, TypeError):
+                pass
+        
+        # Category 2: Unassigned high priority
+        if not task.has_owner() and task.priority == 'high':
+            unassigned_high.append(task)
+        
+        # Category 3: Blocked without handoff note
+        if task.is_blocked() and not task.handoff_note:
+            blocked_no_note.append(task)
+        
+        # Category 4: In review status but no reviewer
+        if task.status == 'review' and not task.has_reviewer():
+            needs_reviewer.append(task)
+        
+        # Category 5: Overdue and incomplete
+        if task.is_overdue():
+            overdue_incomplete.append(task)
+    
+    # Generate output based on format
+    if format == 'markdown':
+        lines = ["# 📋 Handoff Report", "", f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
+        
+        # Due today
+        if due_today:
+            lines.append("## 🔴 Tasks Due Today (Need Handoff)")
+            lines.append("")
+            for task in due_today:
+                lines.append(f"- [ ] **#{task.id}** {task.text}")
+                if task.owner:
+                    lines.append(f"  - Owner: {task.owner}")
+                if task.handoff_note:
+                    lines.append(f"  - Handoff Note: {task.handoff_note}")
+                lines.append("")
+        else:
+            lines.append("## ✅ Tasks Due Today")
+            lines.append("")
+            lines.append("No tasks due today.")
+            lines.append("")
+        
+        # Unassigned high priority
+        if unassigned_high:
+            lines.append("## ⚠️ Unassigned High-Priority Tasks")
+            lines.append("")
+            for task in unassigned_high:
+                lines.append(f"- [ ] **#{task.id}** {task.text}")
+                if task.due_at:
+                    lines.append(f"  - Due: {task.get_due_date_display()}")
+                lines.append("")
+        else:
+            lines.append("## ✅ Unassigned High-Priority Tasks")
+            lines.append("")
+            lines.append("All high-priority tasks are assigned.")
+            lines.append("")
+        
+        # Blocked without note
+        if blocked_no_note:
+            lines.append("## 🚫 Blocked Tasks Without Handoff Notes")
+            lines.append("")
+            for task in blocked_no_note:
+                lines.append(f"- [ ] **#{task.id}** {task.text}")
+                if task.owner:
+                    lines.append(f"  - Owner: {task.owner}")
+                lines.append(f"  - Blocked by: #{', #'.join(map(str, task.blocked_by))}")
+                lines.append("")
+        else:
+            lines.append("## ✅ Blocked Tasks")
+            lines.append("")
+            lines.append("All blocked tasks have handoff notes.")
+            lines.append("")
+        
+        # Needs reviewer
+        if needs_reviewer:
+            lines.append("## 👀 Tasks Needing Reviewer")
+            lines.append("")
+            for task in needs_reviewer:
+                lines.append(f"- [ ] **#{task.id}** {task.text}")
+                if task.owner:
+                    lines.append(f"  - Owner: {task.owner}")
+                lines.append("")
+        else:
+            lines.append("## ✅ Tasks Needing Reviewer")
+            lines.append("")
+            lines.append("All tasks in review have assigned reviewers.")
+            lines.append("")
+        
+        # Overdue
+        if overdue_incomplete:
+            lines.append("## ⏰ Overdue Incomplete Tasks")
+            lines.append("")
+            for task in overdue_incomplete:
+                lines.append(f"- [ ] **#{task.id}** {task.text}")
+                if task.owner:
+                    lines.append(f"  - Owner: {task.owner}")
+                lines.append(f"  - Due: {task.get_due_date_display()}")
+                lines.append("")
+        else:
+            lines.append("## ✅ Overdue Tasks")
+            lines.append("")
+            lines.append("No overdue incomplete tasks.")
+            lines.append("")
+        
+        # Summary
+        lines.append("## 📊 Summary")
+        lines.append("")
+        lines.append(f"- Tasks due today: {len(due_today)}")
+        lines.append(f"- Unassigned high-priority: {len(unassigned_high)}")
+        lines.append(f"- Blocked without notes: {len(blocked_no_note)}")
+        lines.append(f"- Needs reviewer: {len(needs_reviewer)}")
+        lines.append(f"- Overdue incomplete: {len(overdue_incomplete)}")
+        lines.append("")
+        
+        report_text = "\n".join(lines)
+        
+        if output:
+            Path(output).write_text(report_text, encoding='utf-8')
+            console.print(f"[green]✔[/green] Handoff report saved to {output}")
+        else:
+            console.print(Markdown(report_text))
+    
+    else:
+        # Console format
+        from rich.panel import Panel
+        
+        total_issues = len(due_today) + len(unassigned_high) + len(blocked_no_note) + len(needs_reviewer) + len(overdue_incomplete)
+        
+        console.print("")
+        console.print(Panel(
+            f"[bold cyan]📋 Handoff View[/bold cyan]\n\n"
+            f"[dim]Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}[/dim]\n"
+            f"[yellow]⚠ Items needing attention: {total_issues}[/yellow]",
+            expand=False,
+            border_style="cyan"
+        ))
+        
+        # Due today
+        console.print("")
+        if due_today:
+            console.print("[bold red]🔴 Tasks Due Today (Need Handoff):[/bold red]")
+            for task in due_today:
+                console.print(f"  {_format_task_for_list(task)}")
+                if task.handoff_note:
+                    console.print(f"    [dim]📋 Handoff: {task.handoff_note}[/dim]")
+        else:
+            console.print("[bold green]✅ Tasks Due Today:[/bold green] [dim]None[/dim]")
+        
+        # Unassigned high priority
+        console.print("")
+        if unassigned_high:
+            console.print("[bold yellow]⚠️ Unassigned High-Priority Tasks:[/bold yellow]")
+            for task in unassigned_high:
+                console.print(f"  {_format_task_for_list(task, show_owner=False)}")
+        else:
+            console.print("[bold green]✅ Unassigned High-Priority:[/bold green] [dim]All assigned[/dim]")
+        
+        # Blocked without note
+        console.print("")
+        if blocked_no_note:
+            console.print("[bold red]🚫 Blocked Tasks Without Handoff Notes:[/bold red]")
+            for task in blocked_no_note:
+                console.print(f"  {_format_task_for_list(task)}")
+                console.print(f"    [dim]Blocked by: #{', #'.join(map(str, task.blocked_by))}[/dim]")
+        else:
+            console.print("[bold green]✅ Blocked Tasks:[/bold green] [dim]All have handoff notes[/dim]")
+        
+        # Needs reviewer
+        console.print("")
+        if needs_reviewer:
+            console.print("[bold yellow]👀 Tasks Needing Reviewer:[/bold yellow]")
+            for task in needs_reviewer:
+                console.print(f"  {_format_task_for_list(task)}")
+        else:
+            console.print("[bold green]✅ Tasks Needing Reviewer:[/bold green] [dim]All have reviewers[/dim]")
+        
+        # Overdue
+        console.print("")
+        if overdue_incomplete:
+            console.print("[bold red]⏰ Overdue Incomplete Tasks:[/bold red]")
+            for task in overdue_incomplete:
+                console.print(f"  {_format_task_for_list(task)}")
+                console.print(f"    [dim]Due: {task.get_due_date_display()}[/dim]")
+        else:
+            console.print("[bold green]✅ Overdue Tasks:[/bold green] [dim]None[/dim]")
+        
+        # Summary
+        console.print("")
+        console.print("[bold]📊 Summary:[/bold]")
+        console.print(f"  • Tasks due today: {len(due_today)}")
+        console.print(f"  • Unassigned high-priority: {len(unassigned_high)}")
+        console.print(f"  • Blocked without notes: {len(blocked_no_note)}")
+        console.print(f"  • Needs reviewer: {len(needs_reviewer)}")
+        console.print(f"  • Overdue incomplete: {len(overdue_incomplete)}")
+
+
+@cli.command("daily")
+@click.option("--format", "-f", type=click.Choice(['console', 'markdown']), default='console', help='Output format')
+@click.option("--output", "-o", type=click.Path(), help='Output to file (for markdown format)')
+@click.option("--owner", help='Filter by specific owner')
+def daily_report(format, output, owner):
+    """Daily report - summary of tasks by owner
+    
+    Shows for each owner:
+    - New tasks added today
+    - Tasks completed today
+    - Overdue tasks
+    - Tasks needing handoff
+    - Incident tasks
+    """
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    
+    tasks = storage.load_tasks()
+    today = datetime.now().date()
+    
+    # Group tasks by owner
+    tasks_by_owner = defaultdict(list)
+    unassigned = []
+    
+    for task in tasks:
+        if task.owner:
+            tasks_by_owner[task.owner].append(task)
+        else:
+            unassigned.append(task)
+    
+    # If filtering by specific owner
+    if owner:
+        if owner.lower() == 'none':
+            tasks_by_owner = {'(unassigned)': unassigned}
+        else:
+            filtered = {k: v for k, v in tasks_by_owner.items() if k.lower() == owner.lower()}
+            if not filtered:
+                console.print(f"[yellow]No tasks found for owner: {owner}[/yellow]")
+                return
+            tasks_by_owner = filtered
+    
+    # Calculate statistics for each owner
+    owner_stats = {}
+    
+    for owner_name, owner_tasks in tasks_by_owner.items():
+        stats = {
+            'total': len(owner_tasks),
+            'active': len([t for t in owner_tasks if not t.completed]),
+            'completed': len([t for t in owner_tasks if t.completed]),
+            'added_today': [],
+            'completed_today': [],
+            'overdue': [],
+            'needs_handoff': [],
+            'incidents': [],
+        }
+        
+        for task in owner_tasks:
+            # Added today
+            try:
+                created_date = datetime.fromisoformat(task.created_at).date()
+                if created_date == today:
+                    stats['added_today'].append(task)
+            except (ValueError, TypeError):
+                pass
+            
+            # Completed today
+            if task.completed and task.completed_at:
+                try:
+                    completed_date = datetime.fromisoformat(task.completed_at).date()
+                    if completed_date == today:
+                        stats['completed_today'].append(task)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Overdue
+            if task.is_overdue():
+                stats['overdue'].append(task)
+            
+            # Needs handoff
+            if task.needs_handoff():
+                stats['needs_handoff'].append(task)
+            
+            # Incident
+            if task.is_incident_task() and not task.completed:
+                stats['incidents'].append(task)
+        
+        owner_stats[owner_name] = stats
+    
+    # Add unassigned stats if not filtered
+    if not owner and unassigned:
+        unassigned_stats = {
+            'total': len(unassigned),
+            'active': len([t for t in unassigned if not t.completed]),
+            'completed': len([t for t in unassigned if t.completed]),
+            'added_today': [],
+            'completed_today': [],
+            'overdue': [],
+            'needs_handoff': [],
+            'incidents': [],
+        }
+        
+        for task in unassigned:
+            try:
+                created_date = datetime.fromisoformat(task.created_at).date()
+                if created_date == today:
+                    unassigned_stats['added_today'].append(task)
+            except (ValueError, TypeError):
+                pass
+            
+            if task.is_overdue():
+                unassigned_stats['overdue'].append(task)
+            
+            if task.needs_handoff():
+                unassigned_stats['needs_handoff'].append(task)
+            
+            if task.is_incident_task() and not task.completed:
+                unassigned_stats['incidents'].append(task)
+        
+        owner_stats['(unassigned)'] = unassigned_stats
+    
+    # Generate output
+    if format == 'markdown':
+        lines = ["# 📊 Daily Task Report", "", f"**Date:** {today.strftime('%Y-%m-%d')}", ""]
+        
+        # Overall summary
+        total_active = sum(s['active'] for s in owner_stats.values())
+        total_completed = sum(s['completed'] for s in owner_stats.values())
+        total_added = sum(len(s['added_today']) for s in owner_stats.values())
+        total_completed_today = sum(len(s['completed_today']) for s in owner_stats.values())
+        total_overdue = sum(len(s['overdue']) for s in owner_stats.values())
+        total_incidents = sum(len(s['incidents']) for s in owner_stats.values())
+        
+        lines.append("## 📈 Overall Summary")
+        lines.append("")
+        lines.append(f"- **Total Active Tasks:** {total_active}")
+        lines.append(f"- **Total Completed:** {total_completed}")
+        lines.append(f"- **Added Today:** {total_added}")
+        lines.append(f"- **Completed Today:** {total_completed_today}")
+        lines.append(f"- **Overdue:** {total_overdue}")
+        lines.append(f"- **Active Incidents:** {total_incidents}")
+        lines.append("")
+        
+        # By owner
+        lines.append("## 👥 By Owner")
+        lines.append("")
+        
+        for owner_name, stats in sorted(owner_stats.items()):
+            lines.append(f"### {owner_name}")
+            lines.append("")
+            lines.append(f"- **Active:** {stats['active']} | **Completed:** {stats['completed']}")
+            lines.append(f"- **Added Today:** {len(stats['added_today'])}")
+            lines.append(f"- **Completed Today:** {len(stats['completed_today'])}")
+            lines.append(f"- **Overdue:** {len(stats['overdue'])}")
+            lines.append(f"- **Needs Handoff:** {len(stats['needs_handoff'])}")
+            lines.append(f"- **Active Incidents:** {len(stats['incidents'])}")
+            lines.append("")
+            
+            # Added today
+            if stats['added_today']:
+                lines.append("**Added Today:**")
+                for task in stats['added_today']:
+                    lines.append(f"- [ ] #{task.id} {task.text}")
+                lines.append("")
+            
+            # Completed today
+            if stats['completed_today']:
+                lines.append("**Completed Today:**")
+                for task in stats['completed_today']:
+                    lines.append(f"- [x] #{task.id} {task.text}")
+                lines.append("")
+            
+            # Overdue
+            if stats['overdue']:
+                lines.append("**Overdue:**")
+                for task in stats['overdue']:
+                    lines.append(f"- [ ] #{task.id} {task.text} (Due: {task.get_due_date_display()})")
+                lines.append("")
+            
+            # Incidents
+            if stats['incidents']:
+                lines.append("**Active Incidents:**")
+                for task in stats['incidents']:
+                    lines.append(f"- [ ] 🔴 #{task.id} {task.text}")
+                lines.append("")
+        
+        report_text = "\n".join(lines)
+        
+        if output:
+            Path(output).write_text(report_text, encoding='utf-8')
+            console.print(f"[green]✔[/green] Daily report saved to {output}")
+        else:
+            console.print(Markdown(report_text))
+    
+    else:
+        # Console format
+        from rich.panel import Panel
+        
+        total_active = sum(s['active'] for s in owner_stats.values())
+        total_completed = sum(s['completed'] for s in owner_stats.values())
+        total_added = sum(len(s['added_today']) for s in owner_stats.values())
+        total_completed_today = sum(len(s['completed_today']) for s in owner_stats.values())
+        total_overdue = sum(len(s['overdue']) for s in owner_stats.values())
+        total_incidents = sum(len(s['incidents']) for s in owner_stats.values())
+        
+        console.print("")
+        console.print(Panel(
+            f"[bold cyan]📊 Daily Task Report[/bold cyan]\n\n"
+            f"[dim]Date: {today.strftime('%Y-%m-%d')}[/dim]\n\n"
+            f"[green]Completed Today: {total_completed_today}[/green] | "
+            f"[cyan]Added Today: {total_added}[/cyan] | "
+            f"[yellow]Overdue: {total_overdue}[/yellow] | "
+            f"[red]Incidents: {total_incidents}[/red]",
+            expand=False,
+            border_style="cyan"
+        ))
+        
+        # By owner
+        for owner_name, stats in sorted(owner_stats.items()):
+            console.print("")
+            console.print(f"[bold]👤 {owner_name}[/bold]")
+            console.print(f"  Active: {stats['active']} | Completed: {stats['completed']}")
+            
+            if stats['added_today']:
+                console.print(f"  [cyan]📥 Added Today ({len(stats['added_today'])}):[/cyan]")
+                for task in stats['added_today']:
+                    console.print(f"    • #{task.id}: {task.text}")
+            
+            if stats['completed_today']:
+                console.print(f"  [green]✅ Completed Today ({len(stats['completed_today'])}):[/green]")
+                for task in stats['completed_today']:
+                    console.print(f"    • #{task.id}: {task.text}")
+            
+            if stats['overdue']:
+                console.print(f"  [red]⏰ Overdue ({len(stats['overdue'])}):[/red]")
+                for task in stats['overdue']:
+                    console.print(f"    • #{task.id}: {task.text}")
+            
+            if stats['needs_handoff']:
+                console.print(f"  [yellow]📋 Needs Handoff ({len(stats['needs_handoff'])}):[/yellow]")
+                for task in stats['needs_handoff']:
+                    console.print(f"    • #{task.id}: {task.text}")
+            
+            if stats['incidents']:
+                console.print(f"  [red]🔴 Active Incidents ({len(stats['incidents'])}):[/red]")
+                for task in stats['incidents']:
+                    console.print(f"    • #{task.id}: {task.text}")
+
 
 if __name__ == '__main__':
     cli()
