@@ -240,8 +240,8 @@ def restore(backup_file, data_file, yes):
 @click.option('--status', '-s', default='todo',
               type=click.Choice(STATUS_CHOICES),
               help='Set task status')
-@click.option('--due', '-d', 'due_at', help='Due date (YYYY-MM-DD, today, tomorrow, in-N-days)')
-@click.option('--handoff', '-n', 'handoff_note', help='Add handoff note for task')
+@click.option('--due-at', '-d', 'due_at', help='Due date (YYYY-MM-DD, today, tomorrow, in-N-days)')
+@click.option('--handoff-note', '-n', 'handoff_note', help='Add handoff note for task')
 @click.option('--blocked-by', '-b', help='Tasks blocking this one (comma-separated IDs: 1,2,3)')
 @click.option('--incident', '-i', is_flag=True, help='Mark as incident task')
 def add(task, priority, tag, attach, link, estimate,
@@ -722,13 +722,14 @@ def clear(completed, force):
 @click.option('--owner', '-o', help='Set/change owner (use "none" to clear)')
 @click.option('--reviewer', '-r', help='Set/change reviewer (use "none" to clear)')
 @click.option('--status', '-s', type=click.Choice(STATUS_CHOICES), help='Set task status')
-@click.option('--due', '-d', 'due_at', help='Set due date (YYYY-MM-DD, today, tomorrow; use "none" to clear)')
-@click.option('--handoff', '-n', 'handoff_note', help='Set handoff note (use "none" to clear)')
-@click.option('--add-blocker', 'add_blocker', multiple=True, type=int, help='Add a blocking task ID')
-@click.option('--remove-blocker', 'remove_blocker', multiple=True, type=int, help='Remove a blocking task ID')
+@click.option('--due-at', '-d', 'due_at', help='Set due date (YYYY-MM-DD, today, tomorrow; use "none" to clear)')
+@click.option('--handoff-note', '-n', 'handoff_note', help='Set handoff note (use "none" to clear)')
+@click.option('--blocked-by', '-b', help='Set blocking tasks (comma-separated IDs: 1,2,3; overwrites existing)')
+@click.option('--add-blocker', 'add_blocker', multiple=True, type=int, help='Add a blocking task ID (incremental)')
+@click.option('--remove-blocker', 'remove_blocker', multiple=True, type=int, help='Remove a blocking task ID (incremental)')
 @click.option('--incident/--no-incident', default=None, help='Mark/unmark as incident task')
 def edit(task_id, text, priority, add_tag, remove_tag, attach, link,
-         owner, reviewer, status, due_at, handoff_note, add_blocker, remove_blocker, incident):
+         owner, reviewer, status, due_at, handoff_note, blocked_by, add_blocker, remove_blocker, incident):
     """Edit a task (with team collaboration fields)"""
     task = storage.get_task(task_id)
     if not task:
@@ -831,6 +832,25 @@ def edit(task_id, text, priority, add_tag, remove_tag, attach, link,
             changes.append(f"handoff note updated")
     
     # Blockers
+    # First handle --blocked-by (overwrites existing)
+    if blocked_by is not None:
+        old_blockers = list(task.blocked_by)
+        if blocked_by.lower() == 'none':
+            task.blocked_by = []
+            if old_blockers:
+                changes.append(f"blocked-by: #{', #'.join(map(str, old_blockers))} → (cleared)")
+        else:
+            try:
+                parsed = parse_blocked_by(blocked_by)
+                old_blockers_str = ', #'.join(map(str, old_blockers)) if old_blockers else "(none)"
+                new_blockers_str = ', #'.join(map(str, parsed)) if parsed else "(none)"
+                task.set_blocked_by(parsed)
+                changes.append(f"blocked-by: #{old_blockers_str} → #{new_blockers_str}")
+            except ValueError as e:
+                console.print(f"[red]✗[/red] {str(e)}")
+                return
+    
+    # Then handle incremental --add-blocker and --remove-blocker
     for blocker_id in add_blocker:
         if blocker_id != task.id and blocker_id not in task.blocked_by:
             task.add_blocker(blocker_id)
